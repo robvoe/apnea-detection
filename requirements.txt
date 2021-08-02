@@ -1,0 +1,8 @@
+simplejson
+pytest
+lxml
+numpy
+pandas
+matplotlib
+tqdm
+wfdb  # Necessarily to be installed via pip, since not available in Conda
