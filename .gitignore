@@ -130,6 +130,6 @@ dmypy.json
 
 
 # Project-specific stuff
-.idea/
-./results/ai-based/*
-./results/rule-based/*
+.idea/*
+results/ai-based/*
+results/rule-based/*
