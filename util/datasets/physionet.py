@@ -1,15 +1,15 @@
-from copy import deepcopy
+from abc import ABC
 from dataclasses import dataclass
 import functools
-from typing import Union, List, Optional, Set, Dict
-from pathlib import Path
-from abc import ABC
-
+from copy import deepcopy
 import numpy as np
+from typing import List, Optional, Dict
+from pathlib import Path
+
 import pandas as pd
 import wfdb
 
-from .filter import apply_butterworth_lowpass_filter, apply_butterworth_bandpass_filter
+from util.filter import apply_butterworth_lowpass_filter, apply_butterworth_bandpass_filter
 
 
 __author__ = "Robert Voelckner"
@@ -18,23 +18,8 @@ __license__ = "MIT"
 
 
 @dataclass
-class _SampleReference:
-    sample_num: int  # Refers to the plain integer-index within the signals
-    sample_timedelta: pd.Timedelta  # Refers to the time-of-occurrence; meant to be used with DataFrame
-
-    def __str__(self):
-        return f"'{self.sample_timedelta}'"
-
-    def __repr__(self):
-        return str(self)
-
-    def __int__(self):
-        return self.sample_num
-
-
-@dataclass
 class _Event(ABC):
-    start: _SampleReference
+    start: pd.Timedelta
     aux_note: str
 
 
@@ -45,25 +30,27 @@ class TransientEvent(_Event):
 
 @dataclass
 class EnduringEvent(_Event):
-    end: _SampleReference
+    end: pd.Timedelta
 
 
 @dataclass
-class Dataset:
+class PhysioNetDataset:
     signals: pd.DataFrame
     signal_units: List[str]
     sample_frequency_hz: float
     events: Optional[List[_Event]]  # May be None in case there is no event list (i.e. arousal file)
 
     @functools.cached_property
-    def apnea_events(self) -> List[EnduringEvent]:
-        assert self.events is not None, "No events available, most likely because no arousal file was parsed."
+    def apnea_events(self) -> Optional[List[EnduringEvent]]:
+        if self.events is None:
+            return None
         apnea_events = list(filter(lambda evt: "apnea" in evt.aux_note and isinstance(evt, EnduringEvent), self.events))
-        return apnea_events  # noqa   <-- Code-checker complains about incorrect type of list
+        return apnea_events  # noqa   <-- Code-checker complains about allegedly incorrect type of list
 
-    def clean(self) -> "Dataset":
+    def pre_clean(self) -> "PhysioNetDataset":
         """
-        This function cleans the signal data and applies lowpass/bandpass filtering according to AASM v2.0.3, page 12.
+        This function pre-cleans the signal data and applies low-/band-pass filtering according to AASM v2.0.3, page 12.
+
         :return: Cleaned and filtered copy of the dataset
         """
         o = deepcopy(self)
@@ -84,20 +71,27 @@ class Dataset:
             o.signals[name] = bandpass_wrapper(o.signals[name], f_low_cutoff=0.3, f_high_cutoff=35)
 
         o.signals["ECG"] = bandpass_wrapper(o.signals["ABD"], f_low_cutoff=0.3, f_high_cutoff=70)
+        o.signals = o.signals.astype("float32")
         return o
 
-    def downsample(self, factor: int = 10) -> "Dataset":
+    def downsample(self, downsampling_factor: int = None, target_frequency: float = None) -> "PhysioNetDataset":
         """
         Returns a downsampled version of the dataset. The only touched data fields are 'signals' and
-        'sample_frequency_hz'.
+        'sample_frequency_hz'. Exactly one of two two parameters must be provided!
         """
+        assert (downsampling_factor is None and target_frequency is not None) or \
+               (downsampling_factor is not None and target_frequency is None), \
+            "Exactly one of both parameters must be None!"
         o = deepcopy(self)
-        o.sample_frequency_hz /= factor
+        if downsampling_factor is not None:
+            o.sample_frequency_hz /= downsampling_factor
+        else:
+            o.sample_frequency_hz = target_frequency
         o.signals = o.signals.resample(rule=f"{1/o.sample_frequency_hz*1_000_000}us").mean()
         return o
 
 
-def read_dataset(dataset_folder: Path, dataset_filename_stem: str = None) -> Dataset:
+def read_physionet_dataset(dataset_folder: Path, dataset_filename_stem: str = None) -> PhysioNetDataset:
     """
     Reads datasets of the [*PhysioNet Challenge 2018*](https://physionet.org/content/challenge-2018/1.0.0/). Reads
     samples and annotations from a given dataset folder.
@@ -117,7 +111,7 @@ def read_dataset(dataset_folder: Path, dataset_filename_stem: str = None) -> Dat
     record = wfdb.rdrecord(record_name=str(dataset_folder / dataset_filename_stem))
     sample_frequency = float(record.fs)
     index = pd.timedelta_range(start=0, periods=len(record.p_signal), freq=f"{1/sample_frequency*1_000_000}us")
-    df_signals = pd.DataFrame(data=record.p_signal, columns=record.sig_name, index=index)
+    df_signals = pd.DataFrame(data=record.p_signal, columns=record.sig_name, index=index, dtype="float32")
     signal_units = record.units
 
     # In case they exist, read the annotations
@@ -137,18 +131,17 @@ def read_dataset(dataset_folder: Path, dataset_filename_stem: str = None) -> Dat
                 aux_note = aux_note.rstrip(")")
                 assert aux_note in open_parentheses, f"Event '{aux_note}' cannot end before starting!"
                 start_sample_idx = open_parentheses.pop(aux_note)
-                start = _SampleReference(sample_num=start_sample_idx, sample_timedelta=index[start_sample_idx])
-                end = _SampleReference(sample_num=sample_idx, sample_timedelta=index[sample_idx])
-                events += [EnduringEvent(start=start, end=end, aux_note=aux_note)]
+                events += [EnduringEvent(start=index[start_sample_idx], end=index[sample_idx], aux_note=aux_note)]
             else:
-                start = _SampleReference(sample_num=sample_idx, sample_timedelta=index[sample_idx])
-                events += [TransientEvent(start=start, aux_note=aux_note)]
-    return Dataset(signals=df_signals, signal_units=signal_units, sample_frequency_hz=sample_frequency, events=events)
+                events += [TransientEvent(start=index[sample_idx], aux_note=aux_note)]
+    return PhysioNetDataset(signals=df_signals, signal_units=signal_units, sample_frequency_hz=sample_frequency,
+                            events=events)
 
 
 def test_read_dataset():
     from util.paths import DATA_PATH
-    dataset = read_dataset(dataset_folder=DATA_PATH / "training" / "tr03-0005")
-    dataset = dataset.clean()
-    dataset = dataset.downsample(factor=10)
+    dataset = read_physionet_dataset(dataset_folder=DATA_PATH / "training" / "tr03-0005")
+    apnea_events = dataset.apnea_events
+    dataset = dataset.pre_clean()
+    dataset = dataset.downsample(downsampling_factor=10)
     pass

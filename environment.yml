@@ -1,0 +1,21 @@
+name: apnoe-detection
+channels:
+  - defaults
+dependencies:
+  - python>=3.8
+  - pip
+  - pytest
+  - numpy
+  - pandas
+  - matplotlib
+  - tqdm
+  - jupyter
+  - scipy
+  - conda-forge::einops
+  - numba
+  - scikit-learn
+  - pip:
+    - wfdb
+
+# --> Install PyTorch into existing environment using the following command:
+#     conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia
