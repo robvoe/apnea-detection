@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, NamedTuple
 from pathlib import Path
 import pickle
 from enum import Enum
+import functools
 
 import pandas as pd
 import numpy as np
@@ -21,6 +22,9 @@ class GroundTruthClass(Enum):
     ObstructiveApnea = 2
     MixedApnea = 3
     HypoApnea = 4
+
+
+WindowData = NamedTuple("WindowData", signals=pd.DataFrame, center_point=pd.Timedelta, ground_truth_class=Optional[GroundTruthClass])
 
 
 class SlidingWindowDataset:
@@ -52,7 +56,7 @@ class SlidingWindowDataset:
         del ds
 
         # Some examinations
-        assert config.time_window_size in self.signals.index, \
+        assert self.signals.index[0] <= config.time_window_size < self.signals.index[-1], \
             f"Chosen time_window_size '{config.time_window_size}' is too large for the given PhysioNet dataset!"
         self._time_window_size__index_steps = self.signals.index.get_loc(config.time_window_size, method="pad")
         self._n_window_steps = len(self.signals.index) - self._time_window_size__index_steps + 1
@@ -112,7 +116,7 @@ class SlidingWindowDataset:
             return False
         return True
 
-    def __getitem__(self, idx) -> (pd.DataFrame, pd.Timedelta, GroundTruthClass):
+    def __getitem__(self, idx) -> WindowData:
         assert -len(self) <= idx < len(self), "Index out of bounds"
         if idx < 0:
             idx = idx + len(self)
@@ -126,22 +130,22 @@ class SlidingWindowDataset:
             center_point__gt_class = self.ground_truth_vector.iloc[center_point__index]
             assert not np.isnan(center_point__gt_class)
             center_point__gt_class = GroundTruthClass(int(center_point__gt_class))
-        return features, center_point__timedelta, center_point__gt_class
+        return WindowData(signals=features, center_point=center_point__timedelta, ground_truth_class=center_point__gt_class)
 
     def __len__(self):
         return self._n_window_steps
 
-    def get_valid_center_points(self) -> pd.TimedeltaIndex:
-        """Returns the range of valid center points. Center point refers to the middle of the configured time window."""
-        if not hasattr(self, "__center_points"):
-            central_point__index = int(self._time_window_size__index_steps / 2)
-            index = self.signals.index[central_point__index:-central_point__index+1]
-            assert len(index) == self._n_window_steps
-            setattr(self, "__center_points", index)
-        index = getattr(self, "__center_points")
+    @functools.cached_property
+    def valid_center_points(self) -> pd.TimedeltaIndex:
+        """
+        Provides the range of valid center points. Center point refers to the middle of the configured time window.
+        """
+        central_point__index = int(self._time_window_size__index_steps / 2)
+        index = self.signals.index[central_point__index:-central_point__index+1]
+        assert len(index) == self._n_window_steps
         return index
 
-    def get(self, center_point: pd.Timedelta = None, raw_index: int = None) -> (pd.DataFrame, pd.Timedelta, GroundTruthClass):
+    def get(self, center_point: pd.Timedelta = None, raw_index: int = None) -> WindowData:
         """
         Returns values for a specific time window. The position of the time window either refers to the raw index,
         or to the center of the time window.
@@ -152,7 +156,10 @@ class SlidingWindowDataset:
         assert (center_point is None and raw_index is not None) or (center_point is not None and raw_index is None), \
             "Exactly one of the given arguments must be None!"
         if center_point is not None:
-            assert center_point in self.get_valid_center_points(), f"Given center point {center_point} not in valid range!"
+            valid_start_ = self.valid_center_points[0]
+            valid_end_ = self.valid_center_points[-1]
+            assert valid_start_ <= center_point <= valid_end_, \
+                f"Given center point {center_point} not in range of valid center points ({valid_start_}..{valid_end_})!"
             center_point__index = self.signals.index.get_loc(center_point, method="nearest")
             window_start__index = center_point__index - int(self._time_window_size__index_steps/2)
             assert 0 <= window_start__index < len(self)
@@ -173,6 +180,7 @@ def test_sliding_window_dataset():
     len_ = len(sliding_window_dataset)
     window_data = sliding_window_dataset[-1]
 
-    valid_time_range = sliding_window_dataset.get_valid_center_points()
+    valid_time_range = sliding_window_dataset.valid_center_points
     window_data_ = sliding_window_dataset.get(center_point=valid_time_range[-1])
+    window_data_ = sliding_window_dataset.get(center_point=pd.Timedelta("0 days 00:15:15.930000"))
     pass
