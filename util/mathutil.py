@@ -1,6 +1,9 @@
+import cmath
+import math
 from typing import List, NamedTuple, Optional
 from enum import Enum
 
+import numpy
 import numpy as np
 import numba
 
@@ -29,18 +32,18 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
                                 of samples that form one signal period.
     :return:
     """
-    filter = np.append(-np.ones(filter_kernel_width), np.ones(filter_kernel_width))/filter_kernel_width
-
     # Convolve waveform with the filter kernel & cut the right and left overlaps
-    filtered_waveform = np.convolve(waveform, filter)
-    filtered_waveform = filtered_waveform[filter_kernel_width-1:-filter_kernel_width]
+    filter_kernel = np.ones(filter_kernel_width) / filter_kernel_width
+    filtered_waveform = np.convolve(waveform, filter_kernel)
+    filtered_waveform = filtered_waveform[int(filter_kernel_width/2) - 1:-math.ceil(filter_kernel_width/2)]
     if len(filtered_waveform) != len(waveform):
         raise AssertionError(f"There is a length mismatch in filtered and original waveform. Needs some rework!")
 
     # Align our filtered waveform with the original signal
-    shift = -int(np.pi/2 * filter_kernel_width)
-    filtered_waveform = np.roll(filtered_waveform, shift=shift)
-    filtered_waveform[shift:] = np.nan
+    shift = int(-filter_kernel_width / 4)
+    if shift != 0:
+        filtered_waveform = np.roll(filtered_waveform, shift=shift)
+        filtered_waveform[shift:] = np.nan
 
     zero_crosses_pos: np.ndarray = np.where(np.diff(np.sign(filtered_waveform)) > 1)[0]
     zero_crosses_neg: np.ndarray = np.where(np.diff(np.sign(filtered_waveform)) < -1)[0]
@@ -87,26 +90,27 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
     return peaks
 
 
-def test_1():
+def test_qualitative():
     import matplotlib.pyplot as plt
     T = 4*np.pi
     f_s = 10
     x = np.arange(T*f_s)
     y = np.sin(x/f_s)
 
-    # --------------------- Make some helping plots
+    # --------------------- Make some dev-helping plots. Code was (almost) entirely taken from the function above.
     filter_size = int(f_s)
     # filter = np.append(-np.ones(filter_size), np.ones(filter_size)) / filter_size
     filter = np.ones(filter_size) / filter_size
     filtered_waveform = np.convolve(y, filter)
-    filtered_waveform = filtered_waveform[int(filter_size/2) - 1:-int(filter_size/2)]
+    filtered_waveform = filtered_waveform[int(filter_size/2) - 1:-math.ceil(filter_size/2)]
     if len(filtered_waveform) != len(y):
         raise AssertionError(f"There is a length mismatch in filtered and original waveform. Needs some rework!")
 
     # Align our filtered waveform with the original signal
-    shift = int(-filter_size/2)
-    filtered_waveform = np.roll(filtered_waveform, shift=shift)
-    filtered_waveform[shift:] = np.nan
+    shift = int(-filter_size/4)
+    if shift != 0:
+        filtered_waveform = np.roll(filtered_waveform, shift=shift)
+        filtered_waveform[shift:] = np.nan
 
     plt.plot(y)
     plt.plot(filtered_waveform)
@@ -115,8 +119,44 @@ def test_1():
 
     peaks = get_peaks(waveform=y, filter_kernel_width=int(f_s))
 
-    assert len(peaks) == 3
-    assert peaks[0].type == PeakType.Maximum
-    assert peaks[1].type == PeakType.Minimum
-    assert peaks[2].type == PeakType.Maximum
+    assert len(peaks) == 2
+    assert peaks[0].type == PeakType.Minimum
+    assert peaks[1].type == PeakType.Maximum
     pass
+
+
+def test_jit_speed():
+    from datetime import datetime
+    import os.path
+
+    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__))+"/sample_signal.npy")
+    get_peaks(waveform=sample_signal, filter_kernel_width=5)  # One initial run to JIT the code
+
+    n_runs = 5000
+    started_at = datetime.now()
+    for n in range(n_runs):
+        result = get_peaks(waveform=sample_signal, filter_kernel_width=50)
+    overall_seconds = (datetime.now()-started_at).total_seconds()
+
+    print()
+    print(f"The whole process with n_runs={n_runs} took {overall_seconds*1000:.1f}ms")
+    print(f"A single run took {overall_seconds/n_runs*1000:.2f}ms")
+
+
+def test_example_plot():
+    import os.path
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__)) + "/sample_signal.npy")
+    peaks = get_peaks(waveform=sample_signal, filter_kernel_width=5)
+    peaks_mat = np.zeros(shape=(sample_signal.shape[0],))
+    for p in peaks:
+        peaks_mat[int(p.start + (p.end - p.start) / 2)] = p.extreme_value
+
+    sample_signal_series = pd.Series(sample_signal)
+    peaks_series = pd.Series(peaks_mat)
+    df = pd.concat([sample_signal_series, peaks_series], axis=1)
+
+    df.plot(figsize=(15, 6), subplots=False)
+    plt.show()
