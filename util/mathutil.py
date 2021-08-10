@@ -18,8 +18,9 @@ class ZeroCrossType(Enum):
     Negative = 1
 
 
-Peak = NamedTuple("Peak", type=PeakType, extreme_value=float, start=int, end=int)
+Peak = NamedTuple("Peak", type=PeakType, extreme_value=float, start=int, end=int, center=int)
 ZeroCross = NamedTuple("ZeroCross", type=ZeroCrossType, position=int)
+Cluster = NamedTuple("Cluster", start=int, end=int, length=int)
 
 
 @numba.jit(nopython=True)
@@ -85,12 +86,86 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
         else:
             extreme_value = np.max(waveform[last_zero_cross.position:zero_cross.position])
             peak_type = PeakType.Maximum
-        peaks.append(Peak(type=peak_type, extreme_value=extreme_value, start=last_zero_cross.position, end=zero_cross.position-1))
+        start: int = last_zero_cross.position
+        end: int = zero_cross.position-1
+        peaks.append(Peak(type=peak_type, extreme_value=extreme_value, start=start, end=end, center=int(start+(end-start)/2)))
         last_zero_cross = zero_cross
     return peaks
 
 
-def test_qualitative():
+@numba.jit(nopython=True)
+def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: int = 1, min_length: int = 5) -> List[Cluster]:
+    klass_positions: np.ndarray = np.where(input_vector != no_klass)[0]
+    clusters: List[Cluster] = []
+    cluster__last_valid_position: Optional[int] = None
+    cluster__start: Optional[int] = None
+
+    for position in klass_positions:
+        # klass = input_vector[position]
+        if cluster__last_valid_position is None:
+            cluster__start = cluster__last_valid_position = position
+            continue
+        if (position-cluster__last_valid_position-1) > allowed_distance:
+            cluster_length = cluster__last_valid_position-cluster__start+1
+            if cluster_length >= min_length:
+                clusters.append(Cluster(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
+            cluster__start = position
+        cluster__last_valid_position = position
+
+    # Perhaps, there's yet another cluster in the very last position. Let's check
+    cluster_length = cluster__last_valid_position - cluster__start + 1
+    if cluster_length >= min_length:
+        clusters.append(Cluster(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
+    return clusters
+
+
+def test_cluster_1d_1():
+    input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1])
+    clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=1, min_length=5)
+    assert len(clusters) == 2
+    assert Cluster(start=2, end=8, length=7) in clusters
+    assert Cluster(start=11, end=17, length=7) in clusters
+
+
+def test_cluster_1d_2():
+    input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1])
+    clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=1, min_length=5)
+    assert len(clusters) == 1
+    assert Cluster(start=2, end=8, length=7) in clusters
+
+
+def test_cluster_1d_3():
+    input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1])
+    clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=0, min_length=5)
+    assert len(clusters) == 0
+
+
+def test_cluster_1d_4():
+    input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1])
+    clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=0, min_length=4)
+    assert len(clusters) == 2
+    assert Cluster(start=8, end=12, length=5) in clusters
+    assert Cluster(start=14, end=17, length=4) in clusters
+
+
+def test_cluster_1d__jit_speed():
+    from datetime import datetime
+
+    sample_signal = np.random.rand(1000).round(decimals=0).astype(int)
+    cluster_1d(input_vector=sample_signal)  # One initial run to JIT the code
+
+    n_runs = 5000
+    started_at = datetime.now()
+    for n in range(n_runs):
+        result = cluster_1d(input_vector=sample_signal, no_klass=0, allowed_distance=1, min_length=3)
+    overall_seconds = (datetime.now()-started_at).total_seconds()
+
+    print()
+    print(f"The whole process with n_runs={n_runs} took {overall_seconds*1000:.1f}ms")
+    print(f"A single run took {overall_seconds/n_runs*1000:.2f}ms")
+
+
+def test_get_peaks__qualitative():
     import matplotlib.pyplot as plt
     T = 4*np.pi
     f_s = 10
@@ -125,7 +200,7 @@ def test_qualitative():
     pass
 
 
-def test_jit_speed():
+def test_get_peaks__jit_speed():
     from datetime import datetime
     import os.path
 
@@ -143,7 +218,7 @@ def test_jit_speed():
     print(f"A single run took {overall_seconds/n_runs*1000:.2f}ms")
 
 
-def test_example_plot():
+def test_get_peaks__example_plot():
     import os.path
     import pandas as pd
     import matplotlib.pyplot as plt
@@ -152,7 +227,7 @@ def test_example_plot():
     peaks = get_peaks(waveform=sample_signal, filter_kernel_width=5)
     peaks_mat = np.zeros(shape=(sample_signal.shape[0],))
     for p in peaks:
-        peaks_mat[int(p.start + (p.end - p.start) / 2)] = p.extreme_value
+        peaks_mat[p.center] = p.extreme_value
 
     sample_signal_series = pd.Series(sample_signal)
     peaks_series = pd.Series(peaks_mat)
