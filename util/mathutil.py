@@ -6,6 +6,7 @@ from enum import Enum
 import numpy
 import numpy as np
 import numba
+import numba.typed
 
 
 class PeakType(Enum):
