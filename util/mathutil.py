@@ -18,7 +18,7 @@ class ZeroCrossType(Enum):
     Negative = 1
 
 
-Peak = NamedTuple("Peak", type=PeakType, extreme_value=float, start=int, end=int, center=int)
+Peak = NamedTuple("Peak", type=PeakType, extreme_value=float, start=int, end=int, center=int, length=int)
 ZeroCross = NamedTuple("ZeroCross", type=ZeroCrossType, position=int)
 Cluster = NamedTuple("Cluster", start=int, end=int, length=int)
 
@@ -88,7 +88,7 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
             peak_type = PeakType.Maximum
         start: int = last_zero_cross.position
         end: int = zero_cross.position-1
-        peaks.append(Peak(type=peak_type, extreme_value=extreme_value, start=start, end=end, center=int(start+(end-start)/2)))
+        peaks.append(Peak(type=peak_type, extreme_value=extreme_value, start=start, end=end, center=int(start+(end-start)/2), length=end-start+1))
         last_zero_cross = zero_cross
     return peaks
 
