@@ -205,7 +205,7 @@ def test_get_peaks__jit_speed():
     from datetime import datetime
     import os.path
 
-    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__))+"/sample_signal.npy")
+    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__))+"/sample_airflow_signal_10hz.npy")
     get_peaks(waveform=sample_signal, filter_kernel_width=5)  # One initial run to JIT the code
 
     n_runs = 5000
@@ -224,7 +224,7 @@ def test_get_peaks__example_plot():
     import pandas as pd
     import matplotlib.pyplot as plt
 
-    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__)) + "/sample_signal.npy")
+    sample_signal = numpy.load(file=os.path.dirname(os.path.realpath(__file__)) + "/sample_airflow_signal_10hz.npy")
     peaks = get_peaks(waveform=sample_signal, filter_kernel_width=5)
     peaks_mat = np.zeros(shape=(sample_signal.shape[0],))
     for p in peaks:

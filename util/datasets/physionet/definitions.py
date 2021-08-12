@@ -26,7 +26,7 @@ class ApneaType(Enum):
 @dataclass
 class _Event(ABC):
     start: pd.Timedelta
-    aux_note: str
+    aux_note: Optional[str]
 
 
 @dataclass
@@ -37,6 +37,14 @@ class TransientEvent(_Event):
 @dataclass
 class EnduringEvent(_Event):
     end: pd.Timedelta
+
+    def overlaps(self, other: "EnduringEvent") -> bool:
+        """Returns if two EnduringEvent instances temporally overlap."""
+        if self.start <= other.start <= self.end:
+            return True
+        if other.start <= self.start <= other.end:
+            return True
+        return False
 
 
 @dataclass
@@ -100,3 +108,40 @@ class PhysioNetDataset:
             o.sample_frequency_hz = target_frequency
         o.signals = o.signals.resample(rule=f"{1/o.sample_frequency_hz*1_000_000}us").mean()
         return o
+
+
+def test_enduring_event_overlaps():
+    event1 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is True
+    assert event2.overlaps(event1) is True
+
+    event1 = EnduringEvent(start=pd.to_timedelta("0.5 minute"), end=pd.to_timedelta("1.5 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is True
+    assert event2.overlaps(event1) is True
+
+    event1 = EnduringEvent(start=pd.to_timedelta("0.2 minute"), end=pd.to_timedelta("0.7 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is False
+    assert event2.overlaps(event1) is False
+
+    event1 = EnduringEvent(start=pd.to_timedelta("1.2 minute"), end=pd.to_timedelta("1.7 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is True
+    assert event2.overlaps(event1) is True
+
+    event1 = EnduringEvent(start=pd.to_timedelta("1.5 minute"), end=pd.to_timedelta("2.5 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is True
+    assert event2.overlaps(event1) is True
+
+    event1 = EnduringEvent(start=pd.to_timedelta("2 minute"), end=pd.to_timedelta("3 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is True
+    assert event2.overlaps(event1) is True
+
+    event1 = EnduringEvent(start=pd.to_timedelta("3 minute"), end=pd.to_timedelta("4 minute"), aux_note=None)
+    event2 = EnduringEvent(start=pd.to_timedelta("1 minute"), end=pd.to_timedelta("2 minute"), aux_note=None)
+    assert event1.overlaps(event2) is False
+    assert event2.overlaps(event1) is False
