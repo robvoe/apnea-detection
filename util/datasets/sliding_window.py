@@ -8,7 +8,7 @@ import functools
 import pandas as pd
 import numpy as np
 
-from .physionet import read_physionet_dataset, EnduringEvent
+from .physionet import read_physionet_dataset, ApneaType, ApneaEvent
 
 
 __author__ = "Robert Voelckner"
@@ -22,6 +22,13 @@ class GroundTruthClass(Enum):
     ObstructiveApnea = 2
     MixedApnea = 3
     HypoApnea = 4
+
+
+# Translation table for   ApneaType -> GroundTruthClass
+_APNEA_TYPE__GROUND_TRUTH_CLASS = {ApneaType.CentralApnea: GroundTruthClass.CentralApnea,
+                                   ApneaType.MixedApnea: GroundTruthClass.MixedApnea,
+                                   ApneaType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
+                                   ApneaType.HypoApnea: GroundTruthClass.HypoApnea}
 
 
 WindowData = NamedTuple("WindowData", signals=pd.DataFrame, center_point=pd.Timedelta, ground_truth_class=Optional[GroundTruthClass])
@@ -77,21 +84,16 @@ class SlidingWindowDataset:
                 pickle.dump(obj=self, file=file)
 
     @staticmethod
-    def _generate_ground_truth_vector(temporal_index: pd.TimedeltaIndex, apnea_events: List[EnduringEvent]) -> pd.Series:
+    def _generate_ground_truth_vector(temporal_index: pd.TimedeltaIndex, apnea_events: List[ApneaEvent]) -> pd.Series:
         gt_vector = np.ndarray(shape=(len(temporal_index),))
         gt_vector[:] = GroundTruthClass.NoApnea.value
         for apnea_event in apnea_events:
             start_idx = temporal_index.get_loc(key=apnea_event.start, method="nearest")
             end_idx = temporal_index.get_loc(key=apnea_event.end, method="nearest")
-            if "centralapnea" in apnea_event.aux_note:
-                klass = GroundTruthClass.CentralApnea
-            elif "mixedapnea" in apnea_event.aux_note:
-                klass = GroundTruthClass.MixedApnea
-            elif "obstructiveapnea" in apnea_event.aux_note:
-                klass = GroundTruthClass.ObstructiveApnea
-            else:
-                raise RuntimeError(f"Unrecognized apnea-event aux_note: '{apnea_event.aux_note}'")
-            gt_vector[start_idx:end_idx] = klass.value
+            assert apnea_event.apnea_type in _APNEA_TYPE__GROUND_TRUTH_CLASS.keys(), \
+                f"{apnea_event.apnea_type.name} seems not present in above dictionary (and likely in GroundTruthClass)"
+            gt_class = _APNEA_TYPE__GROUND_TRUTH_CLASS[apnea_event.apnea_type]
+            gt_vector[start_idx:end_idx] = gt_class.value
 
         gt_series = pd.Series(data=gt_vector, index=temporal_index, dtype="uint8")
         return gt_series
