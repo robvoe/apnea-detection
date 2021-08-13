@@ -62,7 +62,8 @@ class _CoarseApneaType(Enum):
 @numba.jit(nopython=True)
 def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz: float) -> Tuple[List[Cluster], List[_CoarseApneaType]]:
     min_apnea_pulse_length = 10*sample_frequency_hz
-    moving_baseline_window_lr = 100  # specifies each direction (left/right) from current peak_index-position
+    max_apnea_pulse_length = 100*sample_frequency_hz
+    moving_baseline_window_lr = 200  # specifies each direction (left/right) from current peak_index position
     filter_kernel_width = int(sample_frequency_hz*0.7)
     n_reference_peaks = 3
     peaks: List[Peak] = get_peaks(waveform=airflow_vector, filter_kernel_width=filter_kernel_width)
@@ -76,19 +77,20 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
         moving_window_right_index = min(peak_index + moving_baseline_window_lr, len(peaks))
         window_peaks = peaks[moving_window_left_index:moving_window_right_index]
         moving_baseline = np.median(np.array([abs(p.extreme_value) for p in window_peaks]))
+        # moving_baseline = np.sqrt(np.mean(np.array([np.square(p.extreme_value) for p in window_peaks])))
         max_allowed_moving_baseline_value = 1.0 * moving_baseline
 
         # Determine the reference-peaks-baseline defined by the peaks directly at our current peak_index-position
         reference_peaks = peaks[peak_index:peak_index + n_reference_peaks]
         reference_peaks_baseline = np.sqrt(np.mean(np.array([np.square(abs(p.extreme_value)) for p in reference_peaks])))
-        # Determine how many subsequent peaks we need to cover at least 8..10s
+        # Determine how many subsequent peaks we need to cover at least 10s
         head_index = peak_index + n_reference_peaks
         lengths_right = np.array([p.length for p in peaks[head_index:]]).cumsum()
         cumulated_lengths_larger_than = (lengths_right >= min_apnea_pulse_length)
         if np.sum(cumulated_lengths_larger_than) == 0:
             break
         tail_index = head_index + cumulated_lengths_larger_than.argmax()
-        # Try to stretch the window longer, whilst preserving its baseline smaller than our baselines
+        # Try to stretch the window longer, whilst preserving its baseline smaller than our above determined baselines
         window_peaks = peaks[head_index:tail_index + 1]
         outside_moving_baseline = np.array([abs(p.extreme_value) for p in window_peaks]) > max_allowed_moving_baseline_value
         ratio_outside_moving_baseline = np.sum(outside_moving_baseline) / outside_moving_baseline.shape[0]
@@ -104,6 +106,11 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
             if window_baseline > reference_peaks_baseline * 0.7 or ratio_outside_moving_baseline > 0.5:
                 tail_index -= 1
                 break
+        # Window longer than allowed? Smells like a false-positive!
+        window_length = peaks[tail_index].end - peaks[head_index].start + 1
+        if window_length > max_apnea_pulse_length:
+            peak_index += 1
+            continue
         # Tail is stretched. Now make sure the signal rises up to its initial (high) value afterwards again
         post_tail_max_peak_index = min(len(peaks), tail_index+10)
         post_tail_peaks = peaks[tail_index:post_tail_max_peak_index]
@@ -116,7 +123,7 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
         most_negative_dip_index = head_index - 1 + min_index
         # Determine the coarse type of our apnea:  Apnea/HypoApnea
         window_peaks = peaks[head_index:tail_index + 1]
-        window_baseline = np.percentile(np.array([abs(p.extreme_value) for p in window_peaks]), 25)
+        window_baseline = np.percentile(np.array([abs(p.extreme_value) for p in window_peaks]), 20)
         type_decision_reference_peaks_baseline = np.max(np.array([(abs(p.extreme_value)) for p in reference_peaks]))
         coarse_apnea_type: _CoarseApneaType = _CoarseApneaType.Apnea if window_baseline <= 0.1 * type_decision_reference_peaks_baseline else _CoarseApneaType.HypoApnea
         coarse_apnea_types.append(coarse_apnea_type)
@@ -152,8 +159,8 @@ def detect_apneas(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake
 
         # If HypoApnea was detected, make sure SaO2 value falls accordingly by >= 3%
         if coarse_apnea_type == _CoarseApneaType.HypoApnea:
-            max_pre_event_sa_o2 = signals["SaO2"][start-pd.to_timedelta("20s"):start].max()
-            min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("30s")].min()
+            max_pre_event_sa_o2 = signals["SaO2"][start-pd.to_timedelta("30s"):start].max()
+            min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("40s")].min()
             if not min_post_event_sa_o2 <= max_pre_event_sa_o2*0.97:
                 n_filtered_hypo_apneas += 1
                 continue
