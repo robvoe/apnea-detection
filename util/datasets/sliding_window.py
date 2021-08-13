@@ -8,8 +8,7 @@ import functools
 import pandas as pd
 import numpy as np
 
-from .physionet import read_physionet_dataset, ApneaType, ApneaEvent
-
+from .physionet import read_physionet_dataset, ApneaType, ApneaEvent, SleepStageType
 
 __author__ = "Robert Voelckner"
 __copyright__ = "Copyright 2021"
@@ -60,6 +59,7 @@ class SlidingWindowDataset:
         ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
         self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
         self.apnea_events = ds.apnea_events
+        self.sleep_stage_events = ds.sleep_stage_events
         del ds
 
         # Some examinations
@@ -77,6 +77,16 @@ class SlidingWindowDataset:
             gt_vector[:edge_cut_index_steps] = np.nan
             gt_vector[-edge_cut_index_steps + 1:] = np.nan
             self.ground_truth_vector = gt_vector
+
+        # In case we have event annotations, generate our "awake" vector
+        if self.sleep_stage_events is not None:
+            is_awake_mat = np.zeros(shape=(len(self.signals.index),), dtype="int8")
+            for event in self.sleep_stage_events:
+                start_idx = self.signals.index.get_loc(event.start)
+                value = 1 if event.sleep_stage_type == SleepStageType.Wakefulness else 0
+                is_awake_mat[start_idx:] = value
+            is_awake_series = pd.Series(data=is_awake_mat, index=self.signals.index)
+            self.signals["Is awake (ref. sleep stages)"] = is_awake_series
 
         # Serialize preprocessed dataset to disk
         if allow_caching:

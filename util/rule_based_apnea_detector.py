@@ -129,19 +129,42 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
     return apnea_areas, coarse_apnea_types
 
 
-def detect_apneas(signals: pd.DataFrame, sample_frequency_hz: float) -> List[ApneaEvent]:
+def detect_apneas(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake_stages: bool) -> List[ApneaEvent]:
     assert all([col in signals for col in _NECESSARY_COLUMNS]), \
         f"At least one of the necessary columns ({_NECESSARY_COLUMNS}) is missing in the passed DataFrame"
+    if ignore_wake_stages:
+        assert "Is awake (ref. sleep stages)" in signals, "Seems like the dataset supports no sleep stages!"
     clusters, coarse_apnea_types = _detect_airflow_apnea_areas(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
 
     apnea_events: List[ApneaEvent] = []
+    n_ignored_wake_stages = 0
+    n_filtered_hypo_apneas = 0
     for cluster, coarse_apnea_type in zip(clusters, coarse_apnea_types):
+        if ignore_wake_stages is True:
+            is_awake = signals["Is awake (ref. sleep stages)"].values != 0
+            cluster_mat = np.zeros(shape=(len(signals),), dtype=bool)
+            cluster_mat[cluster.start:cluster.end] = True
+            if np.sum(is_awake & cluster_mat) != 0:
+                n_ignored_wake_stages += 1
+                continue
         start = signals.index[cluster.start]
         end = signals.index[cluster.end]
+
+        # If HypoApnea was detected, make sure SaO2 value falls accordingly by >= 3%
+        if coarse_apnea_type == _CoarseApneaType.HypoApnea:
+            max_pre_event_sa_o2 = signals["SaO2"][start-pd.to_timedelta("20s"):start].max()
+            min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("30s")].min()
+            if not min_post_event_sa_o2 <= max_pre_event_sa_o2*0.97:
+                n_filtered_hypo_apneas += 1
+                continue
+
         apnea_type = ApneaType.HypoApnea if coarse_apnea_type == _CoarseApneaType.HypoApnea else ApneaType.CentralApnea
         # TODO
         apnea_events += [ApneaEvent(start=start, end=end, aux_note=None, apnea_type=apnea_type)]
 
+    if ignore_wake_stages:
+        print(f"Ignored {n_ignored_wake_stages} apnea events, as they overlap with wake stages")
+    print(f"Filtered out {n_filtered_hypo_apneas} hypo apneas, due to SaO2 not falling by 3%")
     return apnea_events
 
 

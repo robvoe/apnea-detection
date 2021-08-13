@@ -23,6 +23,14 @@ class ApneaType(Enum):
     HypoApnea = 3
 
 
+class SleepStageType(Enum):  # Terminology according to AASM, v2.0.3, page 18
+    Wakefulness = "W"
+    NREM1 = "N1"
+    NREM2 = "N2"
+    NREM3 = "N3"
+    REM = "R"
+
+
 @dataclass
 class _Event(ABC):
     start: pd.Timedelta
@@ -32,6 +40,11 @@ class _Event(ABC):
 @dataclass
 class TransientEvent(_Event):
     pass
+
+
+@dataclass
+class SleepStageEvent(TransientEvent):
+    sleep_stage_type: SleepStageType
 
 
 @dataclass
@@ -65,6 +78,13 @@ class PhysioNetDataset:
             return None
         apnea_events = [e for e in self.events if isinstance(e, ApneaEvent)]
         return apnea_events  # noqa   <-- Code-checker complains about allegedly incorrect type of list
+
+    @functools.cached_property
+    def sleep_stage_events(self) -> Optional[List[SleepStageEvent]]:
+        if self.events is None:
+            return None
+        sleep_stage_events = [e for e in self.events if isinstance(e, SleepStageEvent)]
+        return sleep_stage_events  # noqa   <-- Code-checker complains about allegedly incorrect type of list
 
     def pre_clean(self) -> "PhysioNetDataset":
         """

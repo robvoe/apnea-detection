@@ -4,12 +4,16 @@ from pathlib import Path
 import pandas as pd
 import wfdb
 
-from .definitions import ApneaType, ApneaEvent, EnduringEvent, PhysioNetDataset, _Event, TransientEvent
+from .definitions import ApneaType, ApneaEvent, EnduringEvent, PhysioNetDataset, _Event, TransientEvent, \
+    SleepStageType, SleepStageEvent
 
 
 __author__ = "Robert Voelckner"
 __copyright__ = "Copyright 2021"
 __license__ = "MIT"
+
+
+_SLEEP_STAGE_KEYWORDS = [s.value for s in SleepStageType]
 
 
 def _create_enduring_event(start: pd.Timedelta, end: pd.Timedelta, aux_note: str) -> EnduringEvent:
@@ -27,6 +31,13 @@ def _create_enduring_event(start: pd.Timedelta, end: pd.Timedelta, aux_note: str
             raise RuntimeError(f"Unrecognized apnea-event aux_note: '{aux_note}'")
         return ApneaEvent(start=start, end=end, aux_note=aux_note, apnea_type=apnea_type)
     return EnduringEvent(start=start, end=end, aux_note=aux_note)
+
+
+def _create_transient_event(start: pd.Timedelta, aux_note: str) -> TransientEvent:
+    if aux_note in _SLEEP_STAGE_KEYWORDS:
+        sleep_stage_type = SleepStageType(aux_note)
+        return SleepStageEvent(start=start, aux_note=aux_note, sleep_stage_type=sleep_stage_type)
+    return TransientEvent(start=start, aux_note=aux_note)
 
 
 def read_physionet_dataset(dataset_folder: Path, dataset_filename_stem: str = None) -> PhysioNetDataset:
@@ -71,7 +82,7 @@ def read_physionet_dataset(dataset_folder: Path, dataset_filename_stem: str = No
                 start_sample_idx = open_parentheses.pop(aux_note)
                 events += [_create_enduring_event(start=index[start_sample_idx], end=index[sample_idx], aux_note=aux_note)]
             else:
-                events += [TransientEvent(start=index[sample_idx], aux_note=aux_note)]
+                events += [_create_transient_event(start=index[sample_idx], aux_note=aux_note)]
     return PhysioNetDataset(signals=df_signals, signal_units=signal_units, sample_frequency_hz=sample_frequency,
                             events=events)
 

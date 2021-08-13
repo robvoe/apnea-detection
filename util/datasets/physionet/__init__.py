@@ -1,4 +1,5 @@
-from .definitions import EnduringEvent, TransientEvent, ApneaEvent, ApneaType, PhysioNetDataset
+from .definitions import EnduringEvent, TransientEvent, ApneaEvent, ApneaType, PhysioNetDataset, SleepStageEvent, \
+    SleepStageType
 from .reader import read_physionet_dataset
 
 __author__ = "Robert Voelckner"
