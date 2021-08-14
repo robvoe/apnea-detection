@@ -111,7 +111,7 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
         if window_length > max_apnea_pulse_length:
             peak_index += 1
             continue
-        # Tail is stretched. Now make sure the signal rises up to its initial (high) value afterwards again
+        # Window tail is stretched. Now make sure the signal rises up to its initial (high) value afterwards again
         post_tail_max_peak_index = min(len(peaks), tail_index+10)
         post_tail_peaks = peaks[tail_index:post_tail_max_peak_index]
         if np.sum(np.array([abs(p.extreme_value) > reference_peaks_baseline*0.9 for p in post_tail_peaks])) == 0:
@@ -136,12 +136,20 @@ def _detect_airflow_apnea_areas(airflow_vector: np.ndarray, sample_frequency_hz:
     return apnea_areas, coarse_apnea_types
 
 
+def _classify_apnea(apnea_area: Cluster, abd_peaks: List[Peak], chest_peaks: List[Peak], sample_frequency_hz: float) -> ApneaType:
+    """Classifies a detected apnea (no hypo apnea!) upon ABD and CHEST signals"""
+    # TODO
+    pass
+
+
 def detect_apneas(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake_stages: bool) -> List[ApneaEvent]:
     assert all([col in signals for col in _NECESSARY_COLUMNS]), \
         f"At least one of the necessary columns ({_NECESSARY_COLUMNS}) is missing in the passed DataFrame"
     if ignore_wake_stages:
         assert "Is awake (ref. sleep stages)" in signals, "Seems like the dataset supports no sleep stages!"
     clusters, coarse_apnea_types = _detect_airflow_apnea_areas(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
+    chest_peaks = get_peaks(waveform=signals["CHEST"].values, filter_kernel_width=int(sample_frequency_hz*0.7))
+    abd_peaks = get_peaks(waveform=signals["ABD"].values, filter_kernel_width=int(sample_frequency_hz * 0.7))
 
     apnea_events: List[ApneaEvent] = []
     n_ignored_wake_stages = 0
@@ -165,8 +173,10 @@ def detect_apneas(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake
                 n_filtered_hypo_apneas += 1
                 continue
 
-        apnea_type = ApneaType.HypoApnea if coarse_apnea_type == _CoarseApneaType.HypoApnea else ApneaType.CentralApnea
-        # TODO
+        # Specify type of our detected (hypo) apnea
+        apnea_type = ApneaType.HypoApnea if coarse_apnea_type == _CoarseApneaType.HypoApnea else \
+            _classify_apnea(apnea_area=cluster, abd_peaks=abd_peaks, chest_peaks=chest_peaks, sample_frequency_hz=sample_frequency_hz)
+
         apnea_events += [ApneaEvent(start=start, end=end, aux_note=None, apnea_type=apnea_type)]
 
     if ignore_wake_stages:

@@ -67,6 +67,13 @@ class ApneaEvent(EnduringEvent):
 
 @dataclass
 class PhysioNetDataset:
+    """
+    Container for parsed PhysioNet 2018 dataset data. Supports both annotated (train) and non-annotated (test) datasets.
+
+    Since this class is just a plain container, it is not cache-optimized nor features pre-processing (apart from
+    down-sampling & pre-cleaning according to AASM v2.0.3). For those things, you might rather take a look at the
+    dataset-wrapper SlidingWindowDataset.
+    """
     signals: pd.DataFrame
     signal_units: List[str]
     sample_frequency_hz: float
@@ -120,7 +127,7 @@ class PhysioNetDataset:
         """
         assert (downsampling_factor is None and target_frequency is not None) or \
                (downsampling_factor is not None and target_frequency is None), \
-            "Exactly one of both parameters must be None!"
+            "Exactly one of both parameters must be provided!"
         o = deepcopy(self)
         if downsampling_factor is not None:
             o.sample_frequency_hz /= downsampling_factor

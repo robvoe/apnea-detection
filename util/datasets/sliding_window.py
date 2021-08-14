@@ -34,6 +34,14 @@ WindowData = NamedTuple("WindowData", signals=pd.DataFrame, center_point=pd.Time
 
 
 class SlidingWindowDataset:
+    """
+    Wrapper for PhysioNetDataset class. It adds the following features:
+    - Preprocessing and generation of supporting data vectors
+    - Caching to dramatically speed-up loading
+    - Piecewise (window-based) retrieval of dataset data. Reference hereby is the center point of to-be retrieved window
+    - Generation of ground truth vector. When retrieving a window, the ground truth class is delivered alongside,
+      referring to the center point.
+    """
     @dataclass
     class Config:
         physionet_dataset_folder: Path
@@ -123,6 +131,7 @@ class SlidingWindowDataset:
             self._n_window_steps = preprocessed_dataset._n_window_steps
             self.ground_truth_vector = preprocessed_dataset.ground_truth_vector
             self.apnea_events = preprocessed_dataset.apnea_events
+            self.sleep_stage_events = preprocessed_dataset.sleep_stage_events
             self.signals = preprocessed_dataset.signals
         except BaseException:
             return False
