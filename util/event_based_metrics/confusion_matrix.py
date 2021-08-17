@@ -16,7 +16,7 @@ __copyright__ = "Copyright 2021"
 __license__ = "MIT"
 
 
-Scores = NamedTuple("Scores", precision=float, recall=float, f1_score=float)
+Scores = NamedTuple("Scores", precision=float, recall=float, f1_score=float, undetected=float)
 
 CLASS_LABELS = [k.name for k in RespiratoryEventType] + ["No event"]
 N_CLASSES = len(RespiratoryEventType) + 1
@@ -83,7 +83,9 @@ class EventBasedConfusionMatrix:
                 r_ = np.nan_to_num(r_)
                 f_ = (p_ * r_ * 2) / (p_ + r_)
                 f_ = np.nan_to_num(f_)
-            class_based_scores[klass] = Scores(precision=float(p_), recall=float(r_), f1_score=float(f_))
+                u_ = self._matrix[index, N_CLASSES-1] / self._matrix[index, :N_CLASSES-1].sum()  # can be NaN!
+                u_ = np.nan_to_num(u_)
+            class_based_scores[klass] = Scores(precision=float(p_), recall=float(r_), f1_score=float(f_), undetected=float(u_))
         return class_based_scores
 
     def get_macro_scores(self) -> Scores:
@@ -97,8 +99,10 @@ class EventBasedConfusionMatrix:
         with np.errstate(divide='ignore', invalid='ignore'):  # Helps to suppress divide-by-0-warnings
             macro_f1_score = (macro_precision * macro_recall * 2) / (macro_precision + macro_recall)
             macro_f1_score = np.nan_to_num(macro_f1_score)
+            macro_undetected = self._matrix[:N_CLASSES-1, N_CLASSES-1].sum() / self._matrix[N_CLASSES-1, :N_CLASSES-1].sum()
+            macro_undetected = np.nan_to_num(macro_undetected)
 
-        return Scores(precision=float(macro_precision), recall=float(macro_recall), f1_score=float(macro_f1_score))
+        return Scores(precision=float(macro_precision), recall=float(macro_recall), f1_score=float(macro_f1_score), undetected=float(macro_undetected))
 
 
 def test_confusion_matrix_generation():
