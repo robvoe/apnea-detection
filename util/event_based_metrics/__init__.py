@@ -3,5 +3,5 @@ __copyright__ = "Copyright 2021"
 __license__ = "MIT"
 
 
-from .overlaps import get_overlaps
+from .overlaps import get_overlaps, get_n_detected_annotations
 from .confusion_matrix import EventBasedConfusionMatrix

@@ -30,6 +30,10 @@ class EventBasedConfusionMatrix:
             data[o.annotated.event_type.value, o.detected.event_type.value] += 1
         self._matrix = data  # FIRST DIM: true labels,  SECOND DIM: predicted labels
 
+    @classmethod
+    def empty(cls) -> "EventBasedConfusionMatrix":
+        return cls(annotated_events=[], detected_events=[])
+
     def __add__(self, other: "EventBasedConfusionMatrix") -> "EventBasedConfusionMatrix":
         new = deepcopy(self)
         new._matrix += other._matrix
@@ -43,16 +47,18 @@ class EventBasedConfusionMatrix:
         """
         return self._matrix[index]
 
-    def plot(self, title: Optional[str] = "Confusion matrix of overlapping respiratory events", power_norm_gamma=0.3):
-        # norm = LogNorm(vmin=self._matrix.min(initial=0), vmax=self._matrix.max(initial=1))
+    def plot(self, title: Optional[str] = "Confusion matrix for class confidence of detected events", power_norm_gamma=0.3):
         norm = PowerNorm(gamma=power_norm_gamma, vmin=self._matrix.min(initial=0), vmax=self._matrix.max(initial=1))
-        g = sns.heatmap(self._matrix, annot=True, fmt="d", norm=norm, xticklabels=self._class_labels,
-                        yticklabels=self._class_labels, cmap=sns.color_palette("Blues"), cbar=False)
-        g.set_yticklabels(labels=g.get_yticklabels(), va="center")
+        ax = sns.heatmap(self._matrix, annot=True, fmt="d", norm=norm, xticklabels=self._class_labels,
+                         yticklabels=self._class_labels, cmap=sns.color_palette("Blues"), cbar=False)
+        ax.set_yticklabels(labels=ax.get_yticklabels(), va="center")
+        # ax.yaxis.tick_right()
         plt.xlabel("Predicted labels", fontweight="bold")
-        plt.ylabel("Real labels", fontweight="bold")
+        plt.ylabel("True labels", fontweight="bold")
+        ax.xaxis.set_label_position("top")
+        ax.yaxis.set_label_position("right")
         if title is not None:
-            plt.title(title, pad=30, fontdict={'fontsize': 14, 'fontweight': 'medium'})
+            plt.title(title, pad=25, fontdict={'fontsize': 14, 'fontweight': 'medium'})
         plt.show()
 
     def get_class_based_scores(self) -> Dict[RespiratoryEventType, Scores]:

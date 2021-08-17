@@ -124,7 +124,7 @@ def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz:
         most_negative_dip_index = head_index - 1 + min_index
         # Determine the coarse type of our respiratory event:  Apnea/Hypopnea
         window_peaks = peaks[head_index:tail_index + 1]
-        window_baseline = np.percentile(np.array([abs(p.extreme_value) for p in window_peaks]), 10)
+        window_baseline = np.percentile(np.array([abs(p.extreme_value) for p in window_peaks]), 15)
         type_decision_reference_peaks_baseline = np.max(np.array([(abs(p.extreme_value)) for p in reference_peaks]))
         coarse_event_type: _CoarseRespiratoryEventType = _CoarseRespiratoryEventType.Apnea \
             if window_baseline <= 0.1 * type_decision_reference_peaks_baseline else _CoarseRespiratoryEventType.Hypopnea
@@ -178,9 +178,12 @@ def _classify_apnea(apnea_area: Cluster, abd_peaks: List[Peak], chest_peaks: Lis
     pre_apnea_chest_peaks = _get_pre_event_peaks(event_start=apnea_area.start, peaks=chest_peaks, n_peaks=n_pre_apnea_peaks)
     pre_apnea_abd_baseline = np.median(np.array([abs(p.extreme_value) for p in pre_apnea_abd_peaks]))
     pre_apnea_chest_baseline = np.median(np.array([abs(p.extreme_value) for p in pre_apnea_chest_peaks]))
-    # Determine the mid-event baselines for both of the signals
+    # Determine ABD and CHEST mid-apnea peaks
     apnea_abd_peaks = abd_peaks[_get_peak_index(time=apnea_area.start, peaks=abd_peaks):_get_peak_index(time=apnea_area.end, peaks=abd_peaks)]
     apnea_chest_peaks = chest_peaks[_get_peak_index(time=apnea_area.start, peaks=chest_peaks):_get_peak_index(time=apnea_area.end, peaks=chest_peaks)]
+    if len(apnea_abd_peaks) < 4 or len(apnea_chest_peaks) < 4:
+        return RespiratoryEventType.CentralApnea  # Short-cut to prevent division-by-0 errors in the next lines
+    # Determine the mid-event baselines for both of the signals
     apnea_abd_baseline__part_1 = np.median(np.array([abs(p.extreme_value) for p in apnea_abd_peaks[:int(len(apnea_abd_peaks)*baseline_range_factor__part_1)]]))
     apnea_abd_baseline__part_2 = np.median(np.array([abs(p.extreme_value) for p in apnea_abd_peaks[int(len(apnea_abd_peaks)*baseline_range_factor__part_2):]]))
     apnea_chest_baseline__part_1 = np.median(np.array([abs(p.extreme_value) for p in apnea_chest_peaks[:int(len(apnea_chest_peaks)*baseline_range_factor__part_1)]]))
@@ -203,11 +206,7 @@ def _classify_apnea(apnea_area: Cluster, abd_peaks: List[Peak], chest_peaks: Lis
         return RespiratoryEventType.CentralApnea
     if apnea_abd__peak_density < pre_apnea_abd__peak_density * density_threshold_factor and apnea_chest__peak_density < pre_apnea_chest__peak_density * density_threshold_factor:
         return RespiratoryEventType.CentralApnea
-    # if all(b >= pre_apnea_abd_baseline * threshold_factor for b in (apnea_abd_baseline__part_1, apnea_abd_baseline__part_2)) or \
-    #         all(b >= pre_apnea_chest_baseline * threshold_factor for b in (apnea_chest_baseline__part_1, apnea_chest_baseline__part_2)):
-    #     return ApneaType.ObstructiveApnea
     return RespiratoryEventType.ObstructiveApnea
-    # raise NotImplementedError("Could not determine ApneaType")
 
 
 def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake_stages: bool) -> List[RespiratoryEvent]:
@@ -236,7 +235,7 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
         # If Hypopnea was detected, make sure SaO2 value falls accordingly by >= 3%
         if coarse_type == _CoarseRespiratoryEventType.Hypopnea:
             max_pre_event_sa_o2 = signals["SaO2"][start-pd.to_timedelta("30s"):start].max()
-            min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("40s")].min()
+            min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("60s")].min()
             if not min_post_event_sa_o2 <= max_pre_event_sa_o2*0.97:
                 n_filtered_hypopneas += 1
                 continue
