@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import wfdb
 
-from .definitions import ApneaType, ApneaEvent, EnduringEvent, PhysioNetDataset, _Event, TransientEvent, \
+from .definitions import RespiratoryEventType, RespiratoryEvent, EnduringEvent, PhysioNetDataset, _Event, TransientEvent, \
     SleepStageType, SleepStageEvent
 
 
@@ -20,16 +20,18 @@ def _create_enduring_event(start: pd.Timedelta, end: pd.Timedelta, aux_note: str
     """
     Creates an EnduringEvent out of the given parameters. In certain cases, it chooses the sub-class ApneaEvent instead.
     """
-    if "apnea" in aux_note:
+    if "pnea" in aux_note:
         if "centralapnea" in aux_note:
-            apnea_type = ApneaType.CentralApnea
+            event_type = RespiratoryEventType.CentralApnea
         elif "mixedapnea" in aux_note:
-            apnea_type = ApneaType.MixedApnea
+            event_type = RespiratoryEventType.MixedApnea
         elif "obstructiveapnea" in aux_note:
-            apnea_type = ApneaType.ObstructiveApnea
+            event_type = RespiratoryEventType.ObstructiveApnea
+        elif "hypopnea" in aux_note:
+            event_type = RespiratoryEventType.Hypopnea
         else:
-            raise RuntimeError(f"Unrecognized apnea-event aux_note: '{aux_note}'")
-        return ApneaEvent(start=start, end=end, aux_note=aux_note, apnea_type=apnea_type)
+            raise RuntimeError(f"Unrecognized *pnea event aux_note: '{aux_note}'")
+        return RespiratoryEvent(start=start, end=end, aux_note=aux_note, event_type=event_type)
     return EnduringEvent(start=start, end=end, aux_note=aux_note)
 
 
@@ -90,7 +92,7 @@ def read_physionet_dataset(dataset_folder: Path, dataset_filename_stem: str = No
 def test_read_dataset():
     from util.paths import DATA_PATH
     dataset = read_physionet_dataset(dataset_folder=DATA_PATH / "training" / "tr03-0005")
-    apnea_events = dataset.apnea_events
+    respiratory_events = dataset.respiratory_events
     dataset = dataset.pre_clean()
     dataset = dataset.downsample(downsampling_factor=10)
     pass

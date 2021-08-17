@@ -1,4 +1,4 @@
-name: apnoe-detection
+name: apnea-detection
 channels:
   - defaults
 dependencies:

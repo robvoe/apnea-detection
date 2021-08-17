@@ -16,11 +16,11 @@ __copyright__ = "Copyright 2021"
 __license__ = "MIT"
 
 
-class ApneaType(Enum):
+class RespiratoryEventType(Enum):
     CentralApnea = 0
     ObstructiveApnea = 1
     MixedApnea = 2
-    HypoApnea = 3
+    Hypopnea = 3
 
 
 class SleepStageType(Enum):  # Terminology according to AASM, v2.0.3, page 18
@@ -31,23 +31,23 @@ class SleepStageType(Enum):  # Terminology according to AASM, v2.0.3, page 18
     REM = "R"
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class _Event(ABC):
     start: pd.Timedelta
     aux_note: Optional[str]
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class TransientEvent(_Event):
     pass
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class SleepStageEvent(TransientEvent):
     sleep_stage_type: SleepStageType
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class EnduringEvent(_Event):
     end: pd.Timedelta
 
@@ -60,9 +60,9 @@ class EnduringEvent(_Event):
         return False
 
 
-@dataclass
-class ApneaEvent(EnduringEvent):
-    apnea_type: ApneaType
+@dataclass(frozen=True, eq=True)
+class RespiratoryEvent(EnduringEvent):
+    event_type: RespiratoryEventType
 
 
 @dataclass
@@ -80,11 +80,11 @@ class PhysioNetDataset:
     events: Optional[List[_Event]]  # May be None in case there is no event list (i.e. arousal file)
 
     @functools.cached_property
-    def apnea_events(self) -> Optional[List[ApneaEvent]]:
+    def respiratory_events(self) -> Optional[List[RespiratoryEvent]]:
         if self.events is None:
             return None
-        apnea_events = [e for e in self.events if isinstance(e, ApneaEvent)]
-        return apnea_events  # noqa   <-- Code-checker complains about allegedly incorrect type of list
+        respiratory_events = [e for e in self.events if isinstance(e, RespiratoryEvent)]
+        return respiratory_events  # noqa   <-- Code-checker complains about allegedly incorrect type of list
 
     @functools.cached_property
     def sleep_stage_events(self) -> Optional[List[SleepStageEvent]]:

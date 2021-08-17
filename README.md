@@ -1,5 +1,5 @@
-# apnoe-detection
-Apnoe detector for polysomnographic data
+# Apnea detection
+Apnea/Hypopnea detector for polysomnographic data, specifically for the PhysioNet 2018 dataset
 
 # Sources
 - Base of the AI project structure: https://github.com/TheFloe1995/correct-pose (MIT license)
@@ -7,5 +7,5 @@ Apnoe detector for polysomnographic data
 
 # Preparing Conda environment
 - conda env create --file environment.yml
-- conda activate apnoe-detection
+- conda activate apnea-detection
 - conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia

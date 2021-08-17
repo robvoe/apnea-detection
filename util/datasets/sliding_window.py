@@ -8,7 +8,7 @@ import functools
 import pandas as pd
 import numpy as np
 
-from .physionet import read_physionet_dataset, ApneaType, ApneaEvent, SleepStageType
+from .physionet import read_physionet_dataset, RespiratoryEventType, RespiratoryEvent, SleepStageType
 
 __author__ = "Robert Voelckner"
 __copyright__ = "Copyright 2021"
@@ -16,18 +16,18 @@ __license__ = "MIT"
 
 
 class GroundTruthClass(Enum):
-    NoApnea = 0
+    NoEvent = 0
     CentralApnea = 1
     ObstructiveApnea = 2
     MixedApnea = 3
-    HypoApnea = 4
+    Hypopnea = 4
 
 
-# Translation table for   ApneaType -> GroundTruthClass
-_APNEA_TYPE__GROUND_TRUTH_CLASS = {ApneaType.CentralApnea: GroundTruthClass.CentralApnea,
-                                   ApneaType.MixedApnea: GroundTruthClass.MixedApnea,
-                                   ApneaType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
-                                   ApneaType.HypoApnea: GroundTruthClass.HypoApnea}
+# Translation table for   RespiratoryEventType -> GroundTruthClass
+_RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS = {RespiratoryEventType.CentralApnea: GroundTruthClass.CentralApnea,
+                                               RespiratoryEventType.MixedApnea: GroundTruthClass.MixedApnea,
+                                               RespiratoryEventType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
+                                               RespiratoryEventType.Hypopnea: GroundTruthClass.Hypopnea}
 
 
 WindowData = NamedTuple("WindowData", signals=pd.DataFrame, center_point=pd.Timedelta, ground_truth_class=Optional[GroundTruthClass])
@@ -66,7 +66,7 @@ class SlidingWindowDataset:
         ds = read_physionet_dataset(dataset_folder=config.physionet_dataset_folder)
         ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
         self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
-        self.apnea_events = ds.apnea_events
+        self.respiratory_events = ds.respiratory_events
         self.sleep_stage_events = ds.sleep_stage_events
         del ds
 
@@ -76,10 +76,10 @@ class SlidingWindowDataset:
         self._time_window_size__index_steps = self.signals.index.get_loc(config.time_window_size, method="pad")
         self._n_window_steps = len(self.signals.index) - self._time_window_size__index_steps + 1
 
-        # In case there are apnea event annotations, generate our GroundTruth vector
+        # In case there are respiratory event annotations, generate our GroundTruth vector
         self.ground_truth_vector: Optional[pd.Series] = None
-        if self.apnea_events is not None:
-            gt_vector = self._generate_ground_truth_vector(temporal_index=self.signals.index, apnea_events=self.apnea_events)
+        if self.respiratory_events is not None:
+            gt_vector = self._generate_ground_truth_vector(temporal_index=self.signals.index, respiratory_events=self.respiratory_events)
             # Erase beginning/ending of our gt vector, length depending on our time window size
             edge_cut_index_steps = int(self._time_window_size__index_steps / 2)
             gt_vector[:edge_cut_index_steps] = np.nan
@@ -102,22 +102,22 @@ class SlidingWindowDataset:
                 pickle.dump(obj=self, file=file)
 
     @staticmethod
-    def _generate_ground_truth_vector(temporal_index: pd.TimedeltaIndex, apnea_events: List[ApneaEvent]) -> pd.Series:
+    def _generate_ground_truth_vector(temporal_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
         gt_vector = np.ndarray(shape=(len(temporal_index),))
-        gt_vector[:] = GroundTruthClass.NoApnea.value
-        for apnea_event in apnea_events:
-            start_idx = temporal_index.get_loc(key=apnea_event.start, method="nearest")
-            end_idx = temporal_index.get_loc(key=apnea_event.end, method="nearest")
-            assert apnea_event.apnea_type in _APNEA_TYPE__GROUND_TRUTH_CLASS.keys(), \
-                f"{apnea_event.apnea_type.name} seems not present in above dictionary (and likely in GroundTruthClass)"
-            gt_class = _APNEA_TYPE__GROUND_TRUTH_CLASS[apnea_event.apnea_type]
+        gt_vector[:] = GroundTruthClass.NoEvent.value
+        for event in respiratory_events:
+            start_idx = temporal_index.get_loc(key=event.start, method="nearest")
+            end_idx = temporal_index.get_loc(key=event.end, method="nearest")
+            assert event.event_type in _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS.keys(), \
+                f"{event.event_type.name} seems not present in above dictionary (and likely in GroundTruthClass)"
+            gt_class = _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS[event.event_type]
             gt_vector[start_idx:end_idx] = gt_class.value
 
         gt_series = pd.Series(data=gt_vector, index=temporal_index, dtype="uint8")
         return gt_series
 
     def has_ground_truth(self):
-        return self.apnea_events is not None
+        return self.respiratory_events is not None
 
     def _try_read_preprocessed_dataset(self) -> bool:
         if not self.config.preprocessed_dataset_file.is_file() or not self.config.preprocessed_dataset_file.exists():
@@ -130,14 +130,14 @@ class SlidingWindowDataset:
             self._time_window_size__index_steps = preprocessed_dataset._time_window_size__index_steps
             self._n_window_steps = preprocessed_dataset._n_window_steps
             self.ground_truth_vector = preprocessed_dataset.ground_truth_vector
-            self.apnea_events = preprocessed_dataset.apnea_events
+            self.respiratory_events = preprocessed_dataset.respiratory_events
             self.sleep_stage_events = preprocessed_dataset.sleep_stage_events
             self.signals = preprocessed_dataset.signals
         except BaseException:
             return False
         return True
 
-    def __getitem__(self, idx) -> WindowData:
+    def __getitem__(self, idx: int) -> WindowData:
         assert -len(self) <= idx < len(self), "Index out of bounds"
         if idx < 0:
             idx = idx + len(self)

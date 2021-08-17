@@ -1,4 +1,4 @@
-from .definitions import EnduringEvent, TransientEvent, ApneaEvent, ApneaType, PhysioNetDataset, SleepStageEvent, \
+from .definitions import EnduringEvent, TransientEvent, RespiratoryEvent, RespiratoryEventType, PhysioNetDataset, SleepStageEvent, \
     SleepStageType
 from .reader import read_physionet_dataset
 
