@@ -60,7 +60,9 @@ class EventBasedConfusionMatrix:
 
     def plot(self, title: Optional[str] = "Confusion matrix for classification confidence of respiratory events", power_norm_gamma=0.3):
         norm = PowerNorm(gamma=power_norm_gamma, vmin=self._matrix.min(initial=0), vmax=self._matrix.max(initial=1))
-        ax = sns.heatmap(self._matrix, annot=True, fmt="d", norm=norm, xticklabels=CLASS_LABELS,
+        annotations = self._matrix.tolist()
+        annotations[-1][-1] = ""  # Makes the very bottom-right cell ("no event"-"no event") empty
+        ax = sns.heatmap(self._matrix, annot=annotations, fmt="s", norm=norm, xticklabels=CLASS_LABELS,
                          yticklabels=CLASS_LABELS, cmap=sns.color_palette("Blues"), cbar=False)
         ax.set_yticklabels(labels=ax.get_yticklabels(), va="center")
         # ax.yaxis.tick_right()
