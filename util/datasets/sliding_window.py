@@ -1,5 +1,6 @@
+import copy
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, NamedTuple
+from typing import Optional, Tuple, List, NamedTuple, Union
 from pathlib import Path
 import pickle
 from enum import Enum
@@ -40,17 +41,48 @@ class SlidingWindowDataset:
     """
     @dataclass
     class Config:
-        physionet_dataset_folder: Path
+        dataset_folder: Path
         downsample_frequency_hz: float
         time_window_size: pd.Timedelta  # Length of the slided window. The outputted GT refers to its central point.
+        time_window_stride: Union[pd.Timedelta, int] = 1  # Step width that we proceed with when outputting time window & ground truth vector
+        ground_truth_vector_width: Union[pd.Timedelta, int] = 1  # Width of the outputted GT vector.  If 'int' is passed: Must be a positive odd number!
+
+        def __get_index_steps(self, value: pd.Timedelta, variable_name: str) -> int:
+            reference_timedelta_ = pd.to_timedelta(f"{1/self.downsample_frequency_hz * 1_000_000}us")
+            index_steps_: float = value/reference_timedelta_
+            assert int(index_steps_) == index_steps_, \
+                f"Parameter '{variable_name}' ({value}) has no common factor with the given down-sample frequency ({self.downsample_frequency_hz} Hz)!"
+            return int(index_steps_)
 
         def __post_init__(self):
-            self.preprocessed_dataset_file = self.physionet_dataset_folder.resolve() / "preprocessed.pkl"
+            self.preprocessed_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
+
+            # Determine all the regarding index steps out of the given parameters
+            self.time_window_size__index_steps = self.__get_index_steps(value=self.time_window_size, variable_name="time_window_size")
+
+            if isinstance(self.time_window_stride, pd.Timedelta):
+                self.time_window_stride__index_steps = self.__get_index_steps(value=self.time_window_stride, variable_name="time_window_stride")
+            elif isinstance(self.time_window_stride, int):
+                self.time_window_stride__index_steps = self.time_window_stride
+            else:
+                raise NotImplementedError
+
+            if isinstance(self.ground_truth_vector_width, pd.Timedelta):
+                gt_index_steps_ = self.__get_index_steps(value=self.ground_truth_vector_width, variable_name="ground_truth_vector_width")
+                if (gt_index_steps_ % 2) == 0:
+                    gt_index_steps_ += 1  # For ground_truth_vector_width, we always wish to work with odd numbers!
+            elif isinstance(self.ground_truth_vector_width, int):
+                gt_index_steps_ = self.ground_truth_vector_width
+            else:
+                raise NotImplementedError
+            assert gt_index_steps_ > 0 and (gt_index_steps_ % 2) == 1, \
+                "When passing 'ground_truth_vector_width' as int, it must be a positive odd integer!"
+            self.ground_truth_vector_width__index_steps = gt_index_steps_
 
     def __init__(self, config: Config, allow_caching: bool = True):
         self.config = config
-        assert config.physionet_dataset_folder.exists() and config.physionet_dataset_folder.is_dir(), \
-            f"Given dataset folder '{config.physionet_dataset_folder.resolve()}' either not exists or is no folder."
+        assert config.dataset_folder.exists() and config.dataset_folder.is_dir(), \
+            f"Given dataset folder '{config.dataset_folder.resolve()}' either not exists or is no folder."
 
         # Let's see if there is a cached version that we can load
         if allow_caching:
@@ -59,7 +91,7 @@ class SlidingWindowDataset:
                 return
 
         # Load the PhysioNet dataset from disk and apply some pre-processing
-        ds = read_physionet_dataset(dataset_folder=config.physionet_dataset_folder)
+        ds = read_physionet_dataset(dataset_folder=config.dataset_folder)
         ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
         self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
         self.respiratory_events = ds.respiratory_events
@@ -69,15 +101,14 @@ class SlidingWindowDataset:
         # Some examinations
         assert self.signals.index[0] <= config.time_window_size < self.signals.index[-1], \
             f"Chosen time_window_size '{config.time_window_size}' is too large for the given PhysioNet dataset!"
-        self._time_window_size__index_steps = self.signals.index.get_loc(config.time_window_size, method="pad")
-        self._n_window_steps = len(self.signals.index) - self._time_window_size__index_steps + 1
+        self._n_window_steps = len(self.signals.index) - self.config.time_window_size__index_steps + 1  # TODO
 
         # In case there are respiratory event annotations, generate our GroundTruth vector
         self.ground_truth_vector: Optional[pd.Series] = None
         if self.respiratory_events is not None:
-            gt_vector = self._generate_ground_truth_vector(temporal_index=self.signals.index, respiratory_events=self.respiratory_events)
+            gt_vector = self._generate_ground_truth_vector(signals_time_index=self.signals.index, respiratory_events=self.respiratory_events)
             # Erase beginning/ending of our gt vector, length depending on our time window size
-            edge_cut_index_steps = int(self._time_window_size__index_steps / 2)
+            edge_cut_index_steps = int(self.config.time_window_size__index_steps / 2)  # TODO
             gt_vector[:edge_cut_index_steps] = np.nan
             gt_vector[-edge_cut_index_steps + 1:] = np.nan
             self.ground_truth_vector = gt_vector
@@ -98,18 +129,18 @@ class SlidingWindowDataset:
                 pickle.dump(obj=self, file=file)
 
     @staticmethod
-    def _generate_ground_truth_vector(temporal_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
-        gt_vector = np.ndarray(shape=(len(temporal_index),))
+    def _generate_ground_truth_vector(signals_time_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
+        gt_vector = np.ndarray(shape=(len(signals_time_index),))
         gt_vector[:] = GroundTruthClass.NoEvent.value
         for event in respiratory_events:
-            start_idx = temporal_index.get_loc(key=event.start, method="nearest")
-            end_idx = temporal_index.get_loc(key=event.end, method="nearest")
+            start_idx = signals_time_index.get_loc(key=event.start, method="nearest")
+            end_idx = signals_time_index.get_loc(key=event.end, method="nearest")
             assert event.event_type in _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS.keys(), \
                 f"{event.event_type.name} seems not present in above dictionary (and likely in GroundTruthClass)"
             gt_class = _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS[event.event_type]
             gt_vector[start_idx:end_idx] = gt_class.value
 
-        gt_series = pd.Series(data=gt_vector, index=temporal_index, dtype="uint8")
+        gt_series = pd.Series(data=gt_vector, index=signals_time_index, dtype="uint8")
         return gt_series
 
     def has_ground_truth(self):
@@ -121,15 +152,20 @@ class SlidingWindowDataset:
         try:
             with open(file=self.config.preprocessed_dataset_file, mode="rb") as file:
                 preprocessed_dataset: SlidingWindowDataset = pickle.load(file)
-            assert preprocessed_dataset.config.time_window_size == self.config.time_window_size
-            assert preprocessed_dataset.config.downsample_frequency_hz == self.config.downsample_frequency_hz
-            self._time_window_size__index_steps = preprocessed_dataset._time_window_size__index_steps
+            # Check if configs match (hereby leave out the dataset folder!)
+            config_1_, config_2_ = copy.deepcopy(preprocessed_dataset.config), copy.deepcopy(self.config)
+            config_1_.dataset_folder = config_1_.preprocessed_dataset_file = None
+            config_2_.dataset_folder = config_2_.preprocessed_dataset_file = None
+            assert config_1_ == config_2_
+            # Now, retrieve the cached data fields
             self._n_window_steps = preprocessed_dataset._n_window_steps
             self.ground_truth_vector = preprocessed_dataset.ground_truth_vector
             self.respiratory_events = preprocessed_dataset.respiratory_events
             self.sleep_stage_events = preprocessed_dataset.sleep_stage_events
             self.signals = preprocessed_dataset.signals
-        except BaseException:
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:  # We intentionally catch everything here!
             return False
         return True
 
@@ -137,9 +173,9 @@ class SlidingWindowDataset:
         assert -len(self) <= idx < len(self), "Index out of bounds"
         if idx < 0:
             idx = idx + len(self)
-        features = self.signals.iloc[idx:idx+self._time_window_size__index_steps]
+        features = self.signals.iloc[idx:idx+self.config.time_window_size__index_steps]
 
-        center_point__index = idx + int(self._time_window_size__index_steps/2)
+        center_point__index = idx + int(self.config.time_window_size__index_steps/2)
         center_point__timedelta = self.signals.index[center_point__index]
 
         center_point__gt_class = None
@@ -157,7 +193,7 @@ class SlidingWindowDataset:
         """
         Provides the range of valid center points. Center point refers to the middle of the configured time window.
         """
-        central_point__index = int(self._time_window_size__index_steps / 2)
+        central_point__index = int(self.config.time_window_size__index_steps / 2)
         index = self.signals.index[central_point__index:-central_point__index+1]
         assert len(index) == self._n_window_steps
         return index
@@ -178,7 +214,7 @@ class SlidingWindowDataset:
             assert valid_start_ <= center_point <= valid_end_, \
                 f"Given center point {center_point} not in range of valid center points ({valid_start_}..{valid_end_})!"
             center_point__index = self.signals.index.get_loc(center_point, method="nearest")
-            window_start__index = center_point__index - int(self._time_window_size__index_steps/2)
+            window_start__index = center_point__index - int(self.config.time_window_size__index_steps/2)
             assert 0 <= window_start__index < len(self)
         else:
             window_start__index = raw_index
@@ -189,11 +225,13 @@ def test_sliding_window_dataset():
     from util.paths import DATA_PATH
 
     config = SlidingWindowDataset.Config(
-        physionet_dataset_folder=DATA_PATH / "training" / "tr03-0005",
+        dataset_folder=DATA_PATH / "training" / "tr03-0005",
         downsample_frequency_hz=10,
-        time_window_size=pd.Timedelta("2 minutes")
+        time_window_size=pd.Timedelta("2 minutes"),
+        time_window_stride=pd.to_timedelta("400ms"),
+        ground_truth_vector_width=1
     )
-    sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=True)
+    sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=False)
     len_ = len(sliding_window_dataset)
     window_data = sliding_window_dataset[-1]
 
