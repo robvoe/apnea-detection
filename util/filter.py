@@ -6,11 +6,6 @@ import numpy as np
 import pandas as pd
 
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
-
 @lru_cache(maxsize=None)
 def _get_butterworth_bandpass_coefficients(f_low_cutoff: float, f_high_cutoff: float, f_sample: float, filter_order=5):
     f_nyq = 0.5 * f_sample

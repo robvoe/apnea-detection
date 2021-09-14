@@ -10,10 +10,6 @@ import numpy as np
 
 from .physionet import read_physionet_dataset, RespiratoryEventType, RespiratoryEvent, SleepStageType
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
 
 class GroundTruthClass(Enum):
     NoEvent = 0

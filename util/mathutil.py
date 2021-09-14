@@ -1,11 +1,9 @@
-import cmath
 import math
 from typing import List, NamedTuple, Optional
 from enum import Enum
 
 import numpy as np
 import numba
-import numba.typed
 
 
 class PeakType(Enum):
@@ -20,7 +18,7 @@ class ZeroCrossType(Enum):
 
 Peak = NamedTuple("Peak", type=PeakType, extreme_value=float, start=int, end=int, center=int, length=int)
 ZeroCross = NamedTuple("ZeroCross", type=ZeroCrossType, position=int)
-Cluster = NamedTuple("Cluster", start=int, end=int, length=int)
+IntRange = NamedTuple("IntRange", start=int, end=int, length=int)
 
 
 @numba.jit(nopython=True)
@@ -31,7 +29,7 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
     :param waveform: Input waveform. Must be centered around zero.
     :param filter_kernel_width: Width of the filter kernel. Most likely the number
                                 of samples that form one signal period.
-    :return:
+    :return: A list of the detected peaks.
     """
     # Convolve waveform with the filter kernel & cut the right and left overlaps
     filter_kernel = np.ones(filter_kernel_width) / filter_kernel_width
@@ -94,9 +92,9 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
 
 
 @numba.jit(nopython=True)
-def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: int = 1, min_length: int = 5) -> List[Cluster]:
+def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: int = 1, min_length: int = 5) -> List[IntRange]:
     klass_positions: np.ndarray = np.where(input_vector != no_klass)[0]
-    clusters: List[Cluster] = []
+    clusters: List[IntRange] = []
     cluster__last_valid_position: Optional[int] = None
     cluster__start: Optional[int] = None
 
@@ -108,14 +106,14 @@ def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: in
         if (position-cluster__last_valid_position-1) > allowed_distance:
             cluster_length = cluster__last_valid_position-cluster__start+1
             if cluster_length >= min_length:
-                clusters.append(Cluster(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
+                clusters.append(IntRange(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
             cluster__start = position
         cluster__last_valid_position = position
 
     # Perhaps, there's yet another cluster in the very last position. Let's check
     cluster_length = cluster__last_valid_position - cluster__start + 1
     if cluster_length >= min_length:
-        clusters.append(Cluster(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
+        clusters.append(IntRange(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
     return clusters
 
 
@@ -123,15 +121,15 @@ def test_cluster_1d_1():
     input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1])
     clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=1, min_length=5)
     assert len(clusters) == 2
-    assert Cluster(start=2, end=8, length=7) in clusters
-    assert Cluster(start=11, end=17, length=7) in clusters
+    assert IntRange(start=2, end=8, length=7) in clusters
+    assert IntRange(start=11, end=17, length=7) in clusters
 
 
 def test_cluster_1d_2():
     input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1])
     clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=1, min_length=5)
     assert len(clusters) == 1
-    assert Cluster(start=2, end=8, length=7) in clusters
+    assert IntRange(start=2, end=8, length=7) in clusters
 
 
 def test_cluster_1d_3():
@@ -144,8 +142,8 @@ def test_cluster_1d_4():
     input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1])
     clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=0, min_length=4)
     assert len(clusters) == 2
-    assert Cluster(start=8, end=12, length=5) in clusters
-    assert Cluster(start=14, end=17, length=4) in clusters
+    assert IntRange(start=8, end=12, length=5) in clusters
+    assert IntRange(start=14, end=17, length=4) in clusters
 
 
 def test_cluster_1d__jit_speed():
@@ -202,9 +200,9 @@ def test_get_peaks__qualitative():
 
 def test_get_peaks__jit_speed():
     from datetime import datetime
-    import os.path
+    from .paths import UTIL_PATH
 
-    sample_signal = np.load(file=os.path.dirname(os.path.realpath(__file__))+"/sample_airflow_signal_10hz.npy")
+    sample_signal = np.load(file=UTIL_PATH/"sample_airflow_signal_10hz.npy")
     get_peaks(waveform=sample_signal, filter_kernel_width=5)  # One initial run to JIT the code
 
     n_runs = 5000
@@ -219,11 +217,11 @@ def test_get_peaks__jit_speed():
 
 
 def test_get_peaks__example_plot():
-    import os.path
     import pandas as pd
     import matplotlib.pyplot as plt
+    from .paths import UTIL_PATH
 
-    sample_signal = np.load(file=os.path.dirname(os.path.realpath(__file__)) + "/sample_airflow_signal_10hz.npy")
+    sample_signal = np.load(file=UTIL_PATH/"sample_airflow_signal_10hz.npy")
     peaks = get_peaks(waveform=sample_signal, filter_kernel_width=5)
     peaks_mat = np.zeros(shape=(sample_signal.shape[0],))
     for p in peaks:

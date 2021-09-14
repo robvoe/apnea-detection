@@ -11,11 +11,6 @@ import pandas as pd
 from util.filter import apply_butterworth_lowpass_filter, apply_butterworth_bandpass_filter
 
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
-
 class RespiratoryEventType(Enum):
     CentralApnea = 0
     ObstructiveApnea = 1

@@ -3,11 +3,6 @@ from typing import List, Tuple, NamedTuple
 from util.datasets import RespiratoryEvent, RespiratoryEventType
 
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
-
 RespiratoryEventOverlap = NamedTuple("RespiratoryEventOverlap", annotated=RespiratoryEvent, detected=RespiratoryEvent)
 
 

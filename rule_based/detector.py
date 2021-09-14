@@ -4,14 +4,9 @@ from enum import Enum
 import pandas as pd
 import numpy as np
 import numba
-import numba.typed
 
-from util.mathutil import PeakType, Cluster, get_peaks, cluster_1d, Peak
-from .datasets import RespiratoryEvent, RespiratoryEventType
-
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
+from util.mathutil import PeakType, IntRange, get_peaks, Peak
+from util.datasets import RespiratoryEvent, RespiratoryEventType
 
 
 _NECESSARY_COLUMNS = ("AIRFLOW", "ABD", "CHEST", "SaO2")
@@ -22,45 +17,8 @@ class _CoarseRespiratoryEventType(Enum):
     Hypopnea = 1
 
 
-# @numba.jit(nopython=True)
-# def _detect_potential_apnea_airflow_areas(airflow_vector: np.ndarray, sample_frequency_hz: float) -> List[Cluster]:
-#     filter_kernel_width = int(sample_frequency_hz*0.7)
-#     peaks = get_peaks(waveform=airflow_vector, filter_kernel_width=filter_kernel_width)
-#
-#     # Figure out potential low-amplitude areas
-#     overall_baseline = np.median(np.array([abs(p.extreme_value) for p in peaks]))
-#     low_peaks = [p for p in peaks if abs(p.extreme_value) <= overall_baseline*0.9]
-#     low_peaks_mat = np.zeros(shape=airflow_vector.shape)
-#     for p in low_peaks:
-#         low_peaks_mat[p.start:p.end] = p.extreme_value
-#     low_peak_clusters = cluster_1d(low_peaks_mat, no_klass=0, allowed_distance=int(sample_frequency_hz*0.5), min_length=int(sample_frequency_hz * 7))
-#
-#     # Now, do some further filtering with the low-amplitude areas we found
-#     # potential_apnea_clusters: List[Cluster] = []
-#     # for cluster in low_peak_clusters:
-#     #     cluster_peaks = [p for p in peaks if cluster.start <= p.center <= cluster.end]
-#     #     n_cluster_peaks_below_baseline = len([p for p in cluster_peaks if abs(p.extreme_value) <= overall_baseline])
-#     #     if n_cluster_peaks_below_baseline / len(cluster_peaks) >= 0.8:
-#     #         potential_apnea_clusters.append(cluster)
-#
-#     # Find out, which of the detected low-amplitude areas are apneas
-#     apnea_areas: List[Cluster] = []
-#     for cluster in low_peak_clusters:
-#         cluster_peaks = [p for p in peaks if cluster.start <= p.center <= cluster.end]
-#         pre_cluster_peaks = [p for p in peaks if p.center < cluster.start]
-#         if len(pre_cluster_peaks) == 0:
-#             continue
-#         n_pre_cluster_peaks = int(min(len(pre_cluster_peaks), 3))
-#         pre_cluster_peaks = pre_cluster_peaks[-n_pre_cluster_peaks:]
-#
-#         cluster_baseline = np.median(np.array([abs(p.extreme_value) for p in cluster_peaks]))
-#         if any([abs(p.extreme_value*0.3) >= cluster_baseline for p in pre_cluster_peaks]):
-#             apnea_areas.append(cluster)
-#     return apnea_areas
-
-
 @numba.jit(nopython=True)
-def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz: float) -> Tuple[List[Cluster], List[_CoarseRespiratoryEventType]]:
+def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz: float) -> Tuple[List[IntRange], List[_CoarseRespiratoryEventType]]:
     """Takes a look at the AIRFLOW signal and determines areas of (hypo) apneas."""
     min_event_length = 10*sample_frequency_hz
     max_event_length = 100*sample_frequency_hz
@@ -69,7 +27,7 @@ def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz:
     n_reference_peaks = 3
     peaks: List[Peak] = get_peaks(waveform=airflow_vector, filter_kernel_width=filter_kernel_width)
 
-    event_areas: List[Cluster] = []
+    event_areas: List[IntRange] = []
     coarse_event_types: List[_CoarseRespiratoryEventType] = []
     peak_index = 0
     while peak_index < len(peaks)-n_reference_peaks:
@@ -132,7 +90,7 @@ def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz:
 
         start = peaks[most_negative_dip_index].center
         end = peaks[tail_index].end
-        event_areas.append(Cluster(start=start, end=end, length=end-start+1))
+        event_areas.append(IntRange(start=start, end=end, length=end - start + 1))
 
         peak_index = tail_index
     return event_areas, coarse_event_types
@@ -150,11 +108,19 @@ def _get_peak_index(time: int, peaks: List[Peak]) -> Optional[int]:
     return None
 
 
-def _get_pre_event_peaks(event_start: int, peaks: List[Peak], n_peaks: int) -> List[Peak]:
-    if event_start > peaks[-1].end:
+def _get_pre_event_peaks(event_start_time: int, peaks: List[Peak], n_peaks: int) -> List[Peak]:
+    """
+    Returns peaks that occurred directly before a given event.
+
+    @param event_start_time: Start index (with respect to signal) of the event.
+    @param peaks: Peaks list of the entire signal. Pre-event peaks will be taken directly from here.
+    @param n_peaks: Number of pre-event peaks that we wish to get.
+    @return: List of pre-event peaks.
+    """
+    if event_start_time > peaks[-1].end:
         return peaks
 
-    event_start_peak_index = _get_peak_index(time=event_start, peaks=peaks)
+    event_start_peak_index = _get_peak_index(time=event_start_time, peaks=peaks)
     if event_start_peak_index is None:
         return []
 
@@ -166,21 +132,28 @@ def _get_pre_event_peaks(event_start: int, peaks: List[Peak], n_peaks: int) -> L
     return pre_event_peaks
 
 
-def _classify_apnea(apnea_area: Cluster, abd_peaks: List[Peak], chest_peaks: List[Peak], sample_frequency_hz: float) -> RespiratoryEventType:
-    """Classifies a detected apnea (no hypopnea!) upon ABD and CHEST signals"""
+def _classify_apnea(apnea_time_range: IntRange, abd_peaks: List[Peak], chest_peaks: List[Peak]) -> RespiratoryEventType:
+    """
+    Classifies an already-detected apnea (no hypopnea!) upon ABD and CHEST signals
+
+    @param apnea_time_range: Time range (with respect to our AIRFLOW/ABD/CHEST/etc. signals) of the apnea.
+    @param abd_peaks: Peaks list of the entire ABD signal.
+    @param chest_peaks: Peaks list of the entire CHEST signal.
+    @return: Classified type of the respiratory event.
+    """
     n_pre_apnea_peaks = 10
     baseline_range_factor__part_1 = 3/5
     baseline_range_factor__part_2 = 2/5
     baseline_threshold_factor = 0.25
     density_threshold_factor = 0.6
     # Determine our pre-event baseline for both ABD and CHEST signals
-    pre_apnea_abd_peaks = _get_pre_event_peaks(event_start=apnea_area.start, peaks=abd_peaks, n_peaks=n_pre_apnea_peaks)
-    pre_apnea_chest_peaks = _get_pre_event_peaks(event_start=apnea_area.start, peaks=chest_peaks, n_peaks=n_pre_apnea_peaks)
+    pre_apnea_abd_peaks = _get_pre_event_peaks(event_start_time=apnea_time_range.start, peaks=abd_peaks, n_peaks=n_pre_apnea_peaks)
+    pre_apnea_chest_peaks = _get_pre_event_peaks(event_start_time=apnea_time_range.start, peaks=chest_peaks, n_peaks=n_pre_apnea_peaks)
     pre_apnea_abd_baseline = np.median(np.array([abs(p.extreme_value) for p in pre_apnea_abd_peaks]))
     pre_apnea_chest_baseline = np.median(np.array([abs(p.extreme_value) for p in pre_apnea_chest_peaks]))
     # Determine ABD and CHEST mid-apnea peaks
-    apnea_abd_peaks = abd_peaks[_get_peak_index(time=apnea_area.start, peaks=abd_peaks):_get_peak_index(time=apnea_area.end, peaks=abd_peaks)]
-    apnea_chest_peaks = chest_peaks[_get_peak_index(time=apnea_area.start, peaks=chest_peaks):_get_peak_index(time=apnea_area.end, peaks=chest_peaks)]
+    apnea_abd_peaks = abd_peaks[_get_peak_index(time=apnea_time_range.start, peaks=abd_peaks):_get_peak_index(time=apnea_time_range.end, peaks=abd_peaks)]
+    apnea_chest_peaks = chest_peaks[_get_peak_index(time=apnea_time_range.start, peaks=chest_peaks):_get_peak_index(time=apnea_time_range.end, peaks=chest_peaks)]
     if len(apnea_abd_peaks) < 4 or len(apnea_chest_peaks) < 4:
         return RespiratoryEventType.CentralApnea  # Short-cut to prevent division-by-0 errors in the next lines
     # Determine the mid-event baselines for both of the signals
@@ -209,28 +182,37 @@ def _classify_apnea(apnea_area: Cluster, abd_peaks: List[Peak], chest_peaks: Lis
     return RespiratoryEventType.ObstructiveApnea
 
 
-def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, ignore_wake_stages: bool) -> List[RespiratoryEvent]:
+def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, discard_wake_stages: bool) -> List[RespiratoryEvent]:
+    """
+    Detects respiratory events within a bunch of given signals.
+
+    @param signals: Signals dataframe, necessary columns are "AIRFLOW", "ABD", "CHEST", "SaO2".
+    @param sample_frequency_hz: Sample frequency of given signals.
+    @param discard_wake_stages: Denotes if respiratory events during wake stages shall be discarded. If True, the
+                                passed dataframe must contain additional column "Is awake (ref. sleep stages)"
+    @return: List of detected respiratory events.
+    """
     assert all([col in signals for col in _NECESSARY_COLUMNS]), \
         f"At least one of the necessary columns ({_NECESSARY_COLUMNS}) is missing in the passed DataFrame"
-    if ignore_wake_stages:
+    if discard_wake_stages:
         assert "Is awake (ref. sleep stages)" in signals, "Seems like the dataset supports no sleep stages!"
-    clusters, coarse_respiratory_event_types = _detect_airflow_resp_events(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
+    ranges, coarse_respiratory_event_types = _detect_airflow_resp_events(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
     chest_peaks = get_peaks(waveform=signals["CHEST"].values, filter_kernel_width=int(sample_frequency_hz*0.7))
     abd_peaks = get_peaks(waveform=signals["ABD"].values, filter_kernel_width=int(sample_frequency_hz * 0.7))
 
     apnea_events: List[RespiratoryEvent] = []
-    n_ignored_wake_stages = 0
+    n_discarded_wake_stages = 0
     n_filtered_hypopneas = 0
-    for cluster, coarse_type in zip(clusters, coarse_respiratory_event_types):
-        if ignore_wake_stages is True:
+    for range, coarse_type in zip(ranges, coarse_respiratory_event_types):
+        if discard_wake_stages is True:
             is_awake = signals["Is awake (ref. sleep stages)"].values != 0
-            cluster_mat = np.zeros(shape=(len(signals),), dtype=bool)
-            cluster_mat[cluster.start:cluster.end] = True
-            if np.sum(is_awake & cluster_mat) != 0:
-                n_ignored_wake_stages += 1
+            range_mat = np.zeros(shape=(len(signals),), dtype=bool)
+            range_mat[range.start:range.end] = True
+            if np.sum(is_awake & range_mat) != 0:
+                n_discarded_wake_stages += 1
                 continue
-        start = signals.index[cluster.start]
-        end = signals.index[cluster.end]
+        start = signals.index[range.start]
+        end = signals.index[range.end]
 
         # If Hypopnea was detected, make sure SaO2 value falls accordingly by >= 3%
         if coarse_type == _CoarseRespiratoryEventType.Hypopnea:
@@ -243,18 +225,18 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
         # If an apnea was detected, now further specify its type
         event_type = RespiratoryEventType.Hypopnea
         if coarse_type == _CoarseRespiratoryEventType.Apnea:
-            event_type = _classify_apnea(apnea_area=cluster, abd_peaks=abd_peaks, chest_peaks=chest_peaks, sample_frequency_hz=sample_frequency_hz)
+            event_type = _classify_apnea(apnea_time_range=range, abd_peaks=abd_peaks, chest_peaks=chest_peaks)
             assert event_type != RespiratoryEventType.Hypopnea, "Function _classify_apnea() must not return HypoApnea type!"
 
         apnea_events += [RespiratoryEvent(start=start, end=end, aux_note=None, event_type=event_type)]
 
-    if ignore_wake_stages:
-        print(f"Ignored {n_ignored_wake_stages} respiratory events, as they overlap with wake stages")
-    print(f"Filtered out {n_filtered_hypopneas} hypopneas, due to SaO2 not falling by 3%")
+    if discard_wake_stages:
+        print(f"Discarded {n_discarded_wake_stages} respiratory events, as they overlap with wake stages")
+    print(f"Discarded {n_filtered_hypopneas} hypopneas, due to SaO2 not falling by 3%")
     return apnea_events
 
 
-def test_detect_respiratory_events():
+def test_development():
     from util.datasets import SlidingWindowDataset
     from util.paths import DATA_PATH
 
@@ -265,53 +247,5 @@ def test_detect_respiratory_events():
     )
     sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=True)
 
-    events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, ignore_wake_stages=False)
+    events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, discard_wake_stages=False)
     pass
-
-
-def test_get_pre_event_peaks():
-    peaks = [Peak(type=PeakType.Minimum, extreme_value=1, start=10, end=15, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=16, end=30, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=31, end=40, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=41, end=50, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=51, end=60, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=61, end=70, center=0, length=0)]
-    assert len(_get_pre_event_peaks(event_start=5, peaks=peaks, n_peaks=5)) == 0
-    assert len(_get_pre_event_peaks(event_start=12, peaks=peaks, n_peaks=5)) == 0
-    assert len(_get_pre_event_peaks(event_start=15, peaks=peaks, n_peaks=5)) == 0
-    assert len(_get_pre_event_peaks(event_start=16, peaks=peaks, n_peaks=5)) == 1
-    assert len(_get_pre_event_peaks(event_start=30, peaks=peaks, n_peaks=5)) == 1
-    assert len(_get_pre_event_peaks(event_start=100, peaks=peaks, n_peaks=5)) == 6
-
-
-def test_get_peak_index():
-    peaks = [Peak(type=PeakType.Minimum, extreme_value=1, start=10, end=15, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=16, end=30, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=31, end=40, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=41, end=50, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=51, end=60, center=0, length=0),
-             Peak(type=PeakType.Minimum, extreme_value=1, start=61, end=70, center=0, length=0)]
-    assert _get_peak_index(time=33, peaks=peaks) == 2
-    assert _get_peak_index(time=31, peaks=peaks) == 2
-    assert _get_peak_index(time=40, peaks=peaks) == 2
-    assert _get_peak_index(time=41, peaks=peaks) == 3
-    assert _get_peak_index(time=9, peaks=peaks) is None
-    assert _get_peak_index(time=71, peaks=peaks) is None
-
-
-def test_detect_airflow_resp_events__jit_speed():
-    from datetime import datetime
-    import os.path
-
-    sample_vector = np.load(file=os.path.dirname(os.path.realpath(__file__)) + "/sample_airflow_signal_10hz.npy")
-    _detect_airflow_resp_events(airflow_vector=sample_vector, sample_frequency_hz=10)  # One initial run to JIT the code
-
-    n_runs = 1000
-    started_at = datetime.now()
-    for n in range(n_runs):
-        result = _detect_airflow_resp_events(airflow_vector=sample_vector, sample_frequency_hz=10)
-    overall_seconds = (datetime.now()-started_at).total_seconds()
-
-    print()
-    print(f"The whole process with n_runs={n_runs} took {overall_seconds*1000:.1f}ms")
-    print(f"A single run took {overall_seconds/n_runs*1000:.2f}ms")

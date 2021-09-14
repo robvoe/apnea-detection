@@ -8,11 +8,6 @@ from .definitions import RespiratoryEventType, RespiratoryEvent, EnduringEvent, 
     SleepStageType, SleepStageEvent
 
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
-
 _SLEEP_STAGE_KEYWORDS = [s.value for s in SleepStageType]
 
 

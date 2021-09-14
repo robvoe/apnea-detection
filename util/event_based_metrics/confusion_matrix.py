@@ -11,11 +11,6 @@ from util.datasets import RespiratoryEventType, RespiratoryEvent
 from .overlaps import get_overlaps
 
 
-__author__ = "Robert Voelckner"
-__copyright__ = "Copyright 2021"
-__license__ = "MIT"
-
-
 Scores = NamedTuple("Scores", precision=float, recall=float, f1_score=float, undetected=float)
 
 CLASS_LABELS = [k.name for k in RespiratoryEventType] + ["No event"]
