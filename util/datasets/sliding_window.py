@@ -238,8 +238,8 @@ def test_sliding_window_dataset():
 
     config = SlidingWindowDataset.Config(
         dataset_folder=DATA_PATH / "training" / "tr03-0005",
-        downsample_frequency_hz=10,
-        time_window_size=pd.Timedelta("2 minutes"),
+        downsample_frequency_hz=5,
+        time_window_size=pd.Timedelta("5 minutes"),
         time_window_stride=11,
         ground_truth_vector_width=11
     )
