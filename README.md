@@ -1,5 +1,5 @@
 # Apnea detection
-Apnea/Hypopnea detector for polysomnographic data, specifically for the PhysioNet 2018 dataset
+Apnea/hypopnea detector for polysomnographic data, specifically for the PhysioNet 2018 dataset.
 
 # Sources
 - Base of the AI project structure: https://github.com/TheFloe1995/correct-pose (MIT license)
