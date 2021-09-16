@@ -27,6 +27,8 @@ _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS = {RespiratoryEventType.CentralApnea
                                                RespiratoryEventType.MixedApnea: GroundTruthClass.MixedApnea,
                                                RespiratoryEventType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
                                                RespiratoryEventType.Hypopnea: GroundTruthClass.Hypopnea}
+assert len(RespiratoryEventType) == len(GroundTruthClass)-1, \
+    f"There seems at least one class to be missing in either of the types {RespiratoryEventType.__name__} or {GroundTruthClass.__name__}"
 
 
 WindowData = NamedTuple("WindowData", signals=pd.DataFrame, center_point=pd.Timedelta, ground_truth=Optional[pd.Series])
@@ -43,7 +45,6 @@ class SlidingWindowDataset:
     """
     @dataclass
     class Config:
-        dataset_folder: Path
         downsample_frequency_hz: float
         time_window_size: pd.Timedelta  # Length of the slided window. The outputted GT refers to its central point.
         time_window_stride: Union[pd.Timedelta, int] = 1  # Step width that we proceed with when outputting time window & ground truth vector
@@ -57,8 +58,6 @@ class SlidingWindowDataset:
             return int(index_steps_)
 
         def __post_init__(self):
-            self.preprocessed_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
-
             # Determine all the regarding index steps out of the given parameters
             window_index_steps_ = self.__get_index_steps(value=self.time_window_size, variable_name="time_window_size")
             if (window_index_steps_ % 2) == 0:
@@ -84,10 +83,13 @@ class SlidingWindowDataset:
                 "When passing 'ground_truth_vector_width' as int, it must be a positive odd integer!"
             self.ground_truth_vector_width__index_steps = gt_index_steps_
 
-    def __init__(self, config: Config, allow_caching: bool = True):
+    def __init__(self, config: Config, dataset_folder: Path, allow_caching: bool = True):
         self.config = config
-        assert config.dataset_folder.exists() and config.dataset_folder.is_dir(), \
-            f"Given dataset folder '{config.dataset_folder.resolve()}' either not exists or is no folder."
+        self.dataset_folder = dataset_folder
+        self._preprocessed_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
+
+        assert dataset_folder.exists() and dataset_folder.is_dir(), \
+            f"Given dataset folder '{dataset_folder.resolve()}' either not exists or is no folder."
 
         # Let's see if there is a cached version that we can load
         if allow_caching:
@@ -96,7 +98,7 @@ class SlidingWindowDataset:
                 return
 
         # Load the PhysioNet dataset from disk and apply some pre-processing
-        ds = read_physionet_dataset(dataset_folder=config.dataset_folder)
+        ds = read_physionet_dataset(dataset_folder=dataset_folder)
         ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
         self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
         self.respiratory_events = ds.respiratory_events
@@ -137,7 +139,7 @@ class SlidingWindowDataset:
 
         # Serialize preprocessed dataset to disk
         if allow_caching:
-            with open(file=self.config.preprocessed_dataset_file, mode="wb") as file:
+            with open(file=self._preprocessed_dataset_file, mode="wb") as file:
                 pickle.dump(obj=self, file=file)
 
     @staticmethod
@@ -168,16 +170,12 @@ class SlidingWindowDataset:
         return self.respiratory_events is not None
 
     def _try_read_preprocessed_dataset(self) -> bool:
-        if not self.config.preprocessed_dataset_file.is_file() or not self.config.preprocessed_dataset_file.exists():
+        if not self._preprocessed_dataset_file.is_file() or not self._preprocessed_dataset_file.exists():
             return False
         try:
-            with open(file=self.config.preprocessed_dataset_file, mode="rb") as file:
+            with open(file=self._preprocessed_dataset_file, mode="rb") as file:
                 preprocessed_dataset: SlidingWindowDataset = pickle.load(file)
-            # Check if configs match (hereby leave out the dataset folder!)
-            config_1_, config_2_ = copy.deepcopy(preprocessed_dataset.config), copy.deepcopy(self.config)
-            config_1_.dataset_folder = config_1_.preprocessed_dataset_file = None
-            config_2_.dataset_folder = config_2_.preprocessed_dataset_file = None
-            assert config_1_ == config_2_
+            assert self.config == preprocessed_dataset.config
             # Now, retrieve the cached data fields
             self._valid_center_points = preprocessed_dataset._valid_center_points
             self._idx__signal_int_index = preprocessed_dataset._idx__signal_int_index
@@ -247,13 +245,12 @@ def test_sliding_window_dataset():
     from util.paths import DATA_PATH
 
     config = SlidingWindowDataset.Config(
-        dataset_folder=DATA_PATH / "training" / "tr03-0005",
         downsample_frequency_hz=5,
         time_window_size=pd.Timedelta("5 minutes"),
         time_window_stride=11,
         ground_truth_vector_width=11
     )
-    sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=False)
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)
     len_ = len(sliding_window_dataset)
 
     gt_class_occurrences = sliding_window_dataset.gt_class_occurrences

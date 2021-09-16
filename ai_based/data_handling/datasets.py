@@ -8,14 +8,12 @@ import pickle
 from typing import Dict, Tuple, List, Optional, Union, Iterable, NamedTuple
 from datetime import datetime
 from copy import deepcopy
+from pathlib import Path
 
-import einops
 import numpy as np
-import pytz
 import torch.utils.data
 import torch
 import pandas as pd
-import numba
 
 from util.datasets.sliding_window import GroundTruthClass, SlidingWindowDataset
 from util.mathutil import normalize_robust
@@ -51,13 +49,14 @@ class AiDataset(BaseAiDataset):
 
     @dataclass
     class Config:
-        sliding_window_dataset_configs: Union[List[SlidingWindowDataset.Config], SlidingWindowDataset.Config]
+        sliding_window_dataset_config: SlidingWindowDataset.Config
+        dataset_folders: List[Path]
         noise_mean_std: Optional[Tuple[float, float]]
         normalize_signals: List[str] = ("AIRFLOW", "ABD", "CHEST")  # Denotes which of the signals should be normalized
 
         def __post_init__(self):
-            if isinstance(self.sliding_window_dataset_configs, SlidingWindowDataset.Config):
-                self.sliding_window_dataset_configs = [self.sliding_window_dataset_configs]
+            assert all(s in FEATURE_SIGNAL_NAMES for s in self.normalize_signals), \
+                f"At least one of the given 'normalize_signals' is not contained in {FEATURE_SIGNAL_NAMES}!"
 
     def get_no_noise_dataset(self):
         """Returns the same dataset, just without any noise on top."""
@@ -72,8 +71,9 @@ class AiDataset(BaseAiDataset):
 
         # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
         self._sliding_window_datasets = []
-        for dataset_config in self.config.sliding_window_dataset_configs:
-            sliding_window_dataset = SlidingWindowDataset(config=dataset_config, allow_caching=True)
+        for dataset_folder in self.config.dataset_folders:
+            sliding_window_dataset = SlidingWindowDataset(config=config.sliding_window_dataset_config,
+                                                          dataset_folder=dataset_folder, allow_caching=True)
             assert all([s in sliding_window_dataset.signals for s in FEATURE_SIGNAL_NAMES]), \
                 f"{SlidingWindowDataset.__name__} '{sliding_window_dataset.config.dataset_folder.name}' " \
                 f"does not provide all necessary signal names {FEATURE_SIGNAL_NAMES}; at least one signal is missing!"
@@ -152,13 +152,13 @@ def test_ai_dataset():
     from util.paths import DATA_PATH
 
     config = AiDataset.Config(
-        sliding_window_dataset_configs=SlidingWindowDataset.Config(
-            dataset_folder=DATA_PATH / "training" / "tr03-0005",
+        sliding_window_dataset_config=SlidingWindowDataset.Config(
             downsample_frequency_hz=5,
             time_window_size=pd.Timedelta("5 minutes"),
             time_window_stride=11,
             ground_truth_vector_width=11
         ),
+        dataset_folders=[DATA_PATH/"training"/"tr03-0005"],
         noise_mean_std=None
     )
     ai_dataset = AiDataset(config=config)
