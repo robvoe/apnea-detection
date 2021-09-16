@@ -117,6 +117,33 @@ def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: in
     return clusters
 
 
+def normalize_robust(input: np.ndarray) -> np.ndarray:
+    """
+    Normalizes an input signal to:
+    - median = 0
+    - Interquartile range = 1 (range between 25th and 75th percentile)
+
+    @note
+    This way of normalizing is much more robust towards outliers than normalization using mean and std-dev.
+    """
+    median = np.median(input)
+    quartiles = np.quantile(input, q=(0.75, 0.25))
+    inter_quartile_range = quartiles[0] - quartiles[1]
+    return (input-median)/inter_quartile_range
+
+
+def test_normalize_robust():
+    def inter_quartile_range(x): return np.quantile(x, 0.75) - np.quantile(x, 0.25)
+
+    x = np.array([185.24931, 142.84528, 97.157455, 49.803917, 24.945267, 1.1902198, -53.66841, -117.8662, -216.58253, -361.31833, -500.33585, -595.6547, -654.03674, -674.5523, -663.14276, -630.9965])
+    assert not np.isclose(inter_quartile_range(x), 1, atol=0.01)
+    assert not np.isclose(np.median(x), 0, atol=0.01)
+
+    y = normalize_robust(x)
+    assert np.isclose(inter_quartile_range(y), 1, atol=0.01)
+    assert np.isclose(np.median(y), 0, atol=0.01)
+
+
 def test_cluster_1d_1():
     input_vector = np.array([0, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1])
     clusters = cluster_1d(input_vector=input_vector, no_klass=0, allowed_distance=1, min_length=5)

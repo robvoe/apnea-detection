@@ -1,11 +1,12 @@
 import copy
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, NamedTuple, Union, Iterable
+from typing import Optional, Tuple, List, NamedTuple, Union, Iterable, Dict
 from pathlib import Path
 import pickle
 from enum import Enum
 import functools
+from collections import Counter
 
 import pandas as pd
 import numpy as np
@@ -114,15 +115,15 @@ class SlidingWindowDataset:
         assert len(self._valid_center_points) == len(self._idx__signal_int_index)
 
         # In case there are respiratory event annotations, generate our GroundTruth vector
-        self.ground_truth_vector: Optional[pd.Series] = None
+        self.ground_truth_series: Optional[pd.Series] = None
         if self.respiratory_events is not None:
-            gt_vector = self._generate_ground_truth_vector(signals_time_index=self.signals.index, respiratory_events=self.respiratory_events)
-            assert len(gt_vector) == len(self.signals)
+            gt_series = self._generate_ground_truth_series(signals_time_index=self.signals.index, respiratory_events=self.respiratory_events)
+            assert len(gt_series) == len(self.signals)
             # Erase beginning/ending of our gt vector, length depending on our time-window-size & gt-vector-width
             edge_cut_indexes_lr = dist_ - int(self.config.ground_truth_vector_width__index_steps/2) - 1
-            gt_vector[:edge_cut_indexes_lr + 1] = np.nan
-            gt_vector[-edge_cut_indexes_lr:] = np.nan
-            self.ground_truth_vector = gt_vector
+            gt_series[:edge_cut_indexes_lr + 1] = np.nan
+            gt_series[-edge_cut_indexes_lr:] = np.nan
+            self.ground_truth_series = gt_series
 
         # In case we have event annotations, generate our "awake" vector
         if self.sleep_stage_events is not None:
@@ -140,7 +141,7 @@ class SlidingWindowDataset:
                 pickle.dump(obj=self, file=file)
 
     @staticmethod
-    def _generate_ground_truth_vector(signals_time_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
+    def _generate_ground_truth_series(signals_time_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
         gt_vector = np.ndarray(shape=(len(signals_time_index),))
         gt_vector[:] = GroundTruthClass.NoEvent.value
         for event in respiratory_events:
@@ -153,6 +154,15 @@ class SlidingWindowDataset:
 
         gt_series = pd.Series(data=gt_vector, index=signals_time_index, dtype="uint8")
         return gt_series
+
+    @functools.cached_property
+    def gt_class_occurrences(self) -> Dict[GroundTruthClass, int]:
+        """Offers a distribution of ground truth classes."""
+        gt_series__no_nans = self.ground_truth_series[~np.isnan(self.ground_truth_series)]
+        counter = Counter(gt_series__no_nans)
+
+        gt_class_occurrences: Dict[GroundTruthClass, int] = {klass: counter[klass.value] if klass.value in counter else 0 for klass in GroundTruthClass}
+        return gt_class_occurrences
 
     def has_ground_truth(self):
         return self.respiratory_events is not None
@@ -171,7 +181,7 @@ class SlidingWindowDataset:
             # Now, retrieve the cached data fields
             self._valid_center_points = preprocessed_dataset._valid_center_points
             self._idx__signal_int_index = preprocessed_dataset._idx__signal_int_index
-            self.ground_truth_vector = preprocessed_dataset.ground_truth_vector
+            self.ground_truth_series = preprocessed_dataset.ground_truth_series
             self.respiratory_events = preprocessed_dataset.respiratory_events
             self.sleep_stage_events = preprocessed_dataset.sleep_stage_events
             self.signals = preprocessed_dataset.signals
@@ -191,7 +201,7 @@ class SlidingWindowDataset:
 
         gt_series = None
         if self.has_ground_truth():
-            gt_numbers = self.ground_truth_vector[center_point_index-int(self.config.ground_truth_vector_width__index_steps/2):center_point_index+int(self.config.ground_truth_vector_width__index_steps/2)+1]
+            gt_numbers = self.ground_truth_series[center_point_index - int(self.config.ground_truth_vector_width__index_steps / 2):center_point_index + int(self.config.ground_truth_vector_width__index_steps / 2) + 1]
             assert len(gt_numbers) == self.config.ground_truth_vector_width__index_steps
             assert not np.any(np.isnan(gt_numbers))
             gt_classes = [GroundTruthClass(int(g)) for g in gt_numbers]
@@ -245,8 +255,10 @@ def test_sliding_window_dataset():
     )
     sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=False)
     len_ = len(sliding_window_dataset)
-    window_data = sliding_window_dataset[-1]
 
+    gt_class_occurrences = sliding_window_dataset.gt_class_occurrences
+
+    window_data = sliding_window_dataset[-1]
     valid_center_points = sliding_window_dataset.valid_center_points
     window_data_ = sliding_window_dataset.get(center_point=valid_center_points[0])
     window_data_ = sliding_window_dataset.get(center_point=pd.Timedelta("0 days 00:15:15.930000"))
