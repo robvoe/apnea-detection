@@ -11,6 +11,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch.utils.data
 import torch
 import pandas as pd
@@ -25,6 +26,9 @@ FEATURE_SIGNAL_NAMES = ("SaO2", "ABD", "CHEST", "AIRFLOW")  # The signals that e
 
 
 class BaseAiDataset(torch.utils.data.Dataset, ABC):
+    def __init__(self, config):
+        self.config = config
+    
     @abstractmethod
     def __getitem__(self, idx):
         pass
@@ -46,7 +50,6 @@ class AiDataset(BaseAiDataset):
       inference
     - applies preprocessing steps (normalizing etc.) to the features before outputting
     """
-
     @dataclass
     class Config:
         sliding_window_dataset_config: SlidingWindowDataset.Config
@@ -58,16 +61,8 @@ class AiDataset(BaseAiDataset):
             assert all(s in FEATURE_SIGNAL_NAMES for s in self.normalize_signals), \
                 f"At least one of the given 'normalize_signals' is not contained in {FEATURE_SIGNAL_NAMES}!"
 
-    def get_no_noise_dataset(self):
-        """Returns the same dataset, just without any noise on top."""
-        if self.config.noise_mean_std is None:
-            return self
-        config = deepcopy(self.config)
-        config.noise_mean_std = None
-        return self.__class__(config)
-
     def __init__(self, config: Config):
-        self.config = config
+        super(AiDataset, self).__init__(config=config)
 
         # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
         self._sliding_window_datasets = []
@@ -83,6 +78,13 @@ class AiDataset(BaseAiDataset):
         self._sliding_window_datasets_lengths = [len(ds) for ds in self._sliding_window_datasets]
         self._len = sum(self._sliding_window_datasets_lengths)
 
+        # Let's build-up the cache for function _resolve_index() for shorter execution times
+        _ = [self._resolve_index(i) for i in range(self._len)]
+        del _
+
+        # Pre-JIT our normalization method to save time when querying data in multi-process context
+        normalize_robust(np.zeros(shape=(5,)))
+
     def get_sliding_window_timestamps(self, idx) -> SlidingWindowTimestamps:
         """Returns all timestamps that belong to the sliding windows (features & gt) obtained via __getitem__"""
         assert -len(self) <= idx < len(self), "Index out of bounds"
@@ -96,6 +98,7 @@ class AiDataset(BaseAiDataset):
 
         return SlidingWindowTimestamps(center_point=window_data.center_point, features=features_index, ground_truth=gt_index)
 
+    @functools.cache
     def _resolve_index(self, idx: int) -> Tuple[int, int]:
         """Resolves a given index to sliding-window-dataset & dataset-internal index."""
         assert 0 <= idx < len(self), "Index out of bounds"
@@ -125,8 +128,7 @@ class AiDataset(BaseAiDataset):
 
         # Convert samples into tensors
         features_tensor = torch.from_numpy(features).type(torch.float)
-        # features_tensor = einops.rearrange(features_tensor, "time channel -> channel time")
-        gt_tensor = torch.tensor(gt, dtype=torch.int)
+        gt_tensor = torch.tensor(gt, dtype=torch.long)
 
         # Add noise
         if self.config.noise_mean_std is not None:
@@ -148,7 +150,8 @@ class AiDataset(BaseAiDataset):
         return gt_class_occurrences_sum
 
 
-def test_ai_dataset():
+@pytest.fixture
+def ai_dataset_provider() -> AiDataset:
     from util.paths import DATA_PATH
 
     config = AiDataset.Config(
@@ -158,12 +161,40 @@ def test_ai_dataset():
             time_window_stride=11,
             ground_truth_vector_width=11
         ),
-        dataset_folders=[DATA_PATH/"training"/"tr03-0005"],
-        noise_mean_std=None
+        dataset_folders=[DATA_PATH / "training" / "tr07-0168"],
+        noise_mean_std=(0, 0.5),
     )
     ai_dataset = AiDataset(config=config)
+    print()
+    print()
+    print(f"len(dataset) = {len(ai_dataset):,}")
+    return ai_dataset
+
+
+def test_development(ai_dataset_provider):
+    ai_dataset = ai_dataset_provider
     len_ = len(ai_dataset)
     ground_truth_occurrences = ai_dataset.get_gt_class_occurrences()
 
     features, gt = ai_dataset[0]
     pass
+
+
+def test_performance(ai_dataset_provider):
+    from datetime import datetime
+
+    n_cycles = 1
+
+    ai_dataset = ai_dataset_provider
+    started_at = datetime.now()
+    for c in range(n_cycles):
+        for i in range(len(ai_dataset)):
+            features, gt = ai_dataset[i]
+    duration_seconds = (datetime.now()-started_at).total_seconds()
+
+    print()
+    print()
+    print(f"Overall execution time: {duration_seconds:.1f}s")
+    print()
+    print(f"Total duration per whole dataset cycle: {duration_seconds/n_cycles:.1f}s")
+    print(f"Duration per index read: {duration_seconds/n_cycles/len(ai_dataset)*1000:.2f}ms")

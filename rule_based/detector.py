@@ -182,20 +182,20 @@ def _classify_apnea(apnea_time_range: IntRange, abd_peaks: List[Peak], chest_pea
     return RespiratoryEventType.ObstructiveApnea
 
 
-def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, discard_wake_stages: bool) -> List[RespiratoryEvent]:
+def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, awake_series: pd.Series = None) -> List[RespiratoryEvent]:
     """
     Detects respiratory events within a bunch of given signals.
 
     @param signals: Signals dataframe, necessary columns are "AIRFLOW", "ABD", "CHEST", "SaO2".
     @param sample_frequency_hz: Sample frequency of given signals.
-    @param discard_wake_stages: Denotes if respiratory events during wake stages shall be discarded. If True, the
-                                passed dataframe must contain additional column "Is awake (ref. sleep stages)"
+    @param awake_series: If a valid series is passed here, all detected respiratory events during wake stages (value==1)
+                         will be discarded. If None is passed, no wake stages will be taken into account.
     @return: List of detected respiratory events.
     """
     assert all([col in signals for col in _NECESSARY_COLUMNS]), \
         f"At least one of the necessary columns ({_NECESSARY_COLUMNS}) is missing in the passed DataFrame"
-    if discard_wake_stages:
-        assert "Is awake (ref. sleep stages)" in signals, "Seems like the dataset supports no sleep stages!"
+    if awake_series is not None:
+        assert awake_series.index == signals.index, "Indexes of both 'signals' and 'is_awake' must be equal!"
     ranges, coarse_respiratory_event_types = _detect_airflow_resp_events(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
     chest_peaks = get_peaks(waveform=signals["CHEST"].values, filter_kernel_width=int(sample_frequency_hz*0.7))
     abd_peaks = get_peaks(waveform=signals["ABD"].values, filter_kernel_width=int(sample_frequency_hz * 0.7))
@@ -204,11 +204,11 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
     n_discarded_wake_stages = 0
     n_filtered_hypopneas = 0
     for range, coarse_type in zip(ranges, coarse_respiratory_event_types):
-        if discard_wake_stages is True:
-            is_awake = signals["Is awake (ref. sleep stages)"].values != 0
+        if awake_series is not None:
+            is_awake_values = awake_series.values != 0
             range_mat = np.zeros(shape=(len(signals),), dtype=bool)
             range_mat[range.start:range.end] = True
-            if np.sum(is_awake & range_mat) != 0:
+            if np.sum(is_awake_values & range_mat) != 0:
                 n_discarded_wake_stages += 1
                 continue
         start = signals.index[range.start]
@@ -230,8 +230,8 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
 
         apnea_events += [RespiratoryEvent(start=start, end=end, aux_note=None, event_type=event_type)]
 
-    if discard_wake_stages:
-        print(f"Discarded {n_discarded_wake_stages} respiratory events, as they overlap with wake stages")
+    if awake_series:
+        print(f"Discarded {n_discarded_wake_stages} detected respiratory events, as they overlap with wake stages")
     print(f"Discarded {n_filtered_hypopneas} hypopneas, due to SaO2 not falling by 3%")
     return apnea_events
 
@@ -241,11 +241,10 @@ def test_development():
     from util.paths import DATA_PATH
 
     config = SlidingWindowDataset.Config(
-        physionet_dataset_folder=DATA_PATH / "training" / "tr03-0005",
         downsample_frequency_hz=5,
         time_window_size=pd.Timedelta("2 minutes")
     )
-    sliding_window_dataset = SlidingWindowDataset(config=config, allow_caching=True)
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH / "training" / "tr03-0005", allow_caching=True)
 
-    events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, discard_wake_stages=False)
+    events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
     pass

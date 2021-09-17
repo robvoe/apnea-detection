@@ -117,6 +117,7 @@ def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: in
     return clusters
 
 
+@numba.jit(nopython=True)
 def normalize_robust(input: np.ndarray) -> np.ndarray:
     """
     Normalizes an input signal to:
@@ -136,12 +137,12 @@ def test_normalize_robust():
     def inter_quartile_range(x): return np.quantile(x, 0.75) - np.quantile(x, 0.25)
 
     x = np.array([185.24931, 142.84528, 97.157455, 49.803917, 24.945267, 1.1902198, -53.66841, -117.8662, -216.58253, -361.31833, -500.33585, -595.6547, -654.03674, -674.5523, -663.14276, -630.9965])
-    assert not np.isclose(inter_quartile_range(x), 1, atol=0.01)
-    assert not np.isclose(np.median(x), 0, atol=0.01)
+    assert not np.isclose(inter_quartile_range(x), 1, atol=0.001)
+    assert not np.isclose(np.median(x), 0, atol=0.001)
 
     y = normalize_robust(x)
-    assert np.isclose(inter_quartile_range(y), 1, atol=0.01)
-    assert np.isclose(np.median(y), 0, atol=0.01)
+    assert np.isclose(inter_quartile_range(y), 1, atol=0.001)
+    assert np.isclose(np.median(y), 0, atol=0.001)
 
 
 def test_cluster_1d_1():

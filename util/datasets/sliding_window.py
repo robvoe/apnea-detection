@@ -83,19 +83,29 @@ class SlidingWindowDataset:
                 "When passing 'ground_truth_vector_width' as int, it must be a positive odd integer!"
             self.ground_truth_vector_width__index_steps = gt_index_steps_
 
-    def __init__(self, config: Config, dataset_folder: Path, allow_caching: bool = True):
+    def __init__(self, config: Config, dataset_folder: Optional[Path], allow_caching: bool = True, cached_dataset_file: Optional[Path] = None):
         self.config = config
-        self.dataset_folder = dataset_folder
-        self._preprocessed_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
 
-        assert dataset_folder.exists() and dataset_folder.is_dir(), \
-            f"Given dataset folder '{dataset_folder.resolve()}' either not exists or is no folder."
+        if allow_caching is False:
+            assert cached_dataset_file is None, "Illegal parameter combination!"
+
+        # Handle our path parameter logic
+        assert dataset_folder is not None or cached_dataset_file is not None, \
+            "At least one of both parameters 'dataset_folder' and 'cached_dataset_file' must contain a value!"
+        self.dataset_folder = dataset_folder
+        if cached_dataset_file is None:
+            cached_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
 
         # Let's see if there is a cached version that we can load
         if allow_caching:
-            success = self._try_read_preprocessed_dataset()
+            success = self._try_read_cached_dataset(cached_dataset_file=cached_dataset_file)
             if success:
                 return
+
+        assert dataset_folder is not None, \
+            "Since loading cached dataset file failed, we have to load from a dataset folder. But there is None!"
+        assert dataset_folder.exists() and dataset_folder.is_dir(), \
+            f"Given dataset folder '{dataset_folder.resolve()}' either not exists or is no folder."
 
         # Load the PhysioNet dataset from disk and apply some pre-processing
         ds = read_physionet_dataset(dataset_folder=dataset_folder)
@@ -127,20 +137,28 @@ class SlidingWindowDataset:
             gt_series[-edge_cut_indexes_lr:] = np.nan
             self.ground_truth_series = gt_series
 
-        # In case we have event annotations, generate our "awake" vector
-        if self.sleep_stage_events is not None:
-            is_awake_mat = np.zeros(shape=(len(self.signals.index),), dtype="int8")
-            for event in self.sleep_stage_events:
-                start_idx = self.signals.index.get_loc(event.start)
-                value = 1 if event.sleep_stage_type == SleepStageType.Wakefulness else 0
-                is_awake_mat[start_idx:] = value
-            is_awake_series = pd.Series(data=is_awake_mat, index=self.signals.index)
-            self.signals["Is awake (ref. sleep stages)"] = is_awake_series
-
         # Serialize preprocessed dataset to disk
         if allow_caching:
-            with open(file=self._preprocessed_dataset_file, mode="wb") as file:
+            with open(file=cached_dataset_file, mode="wb") as file:
                 pickle.dump(obj=self, file=file)
+
+    @functools.cached_property
+    def awake_series(self) -> Optional[pd.Series]:
+        """
+        Returns an "awake" series, in case we have event annotations available. Otherwise, the result is None.
+
+        @return: Awake vector (1=awake, 0=asleep) as Series. The Series index corresponds to our signals index. None
+                 if there are no event annotations available.
+        """
+        if self.sleep_stage_events is None:
+            return None
+        is_awake_mat = np.zeros(shape=(len(self.signals.index),), dtype="int8")
+        for event in self.sleep_stage_events:
+            start_idx = self.signals.index.get_loc(event.start)
+            value = 1 if event.sleep_stage_type == SleepStageType.Wakefulness else 0
+            is_awake_mat[start_idx:] = value
+        is_awake_series = pd.Series(data=is_awake_mat, index=self.signals.index, name="Is awake (ref. sleep stages)")
+        return is_awake_series
 
     @staticmethod
     def _generate_ground_truth_series(signals_time_index: pd.TimedeltaIndex, respiratory_events: List[RespiratoryEvent]) -> pd.Series:
@@ -169,20 +187,20 @@ class SlidingWindowDataset:
     def has_ground_truth(self):
         return self.respiratory_events is not None
 
-    def _try_read_preprocessed_dataset(self) -> bool:
-        if not self._preprocessed_dataset_file.is_file() or not self._preprocessed_dataset_file.exists():
+    def _try_read_cached_dataset(self, cached_dataset_file: Path) -> bool:
+        if not cached_dataset_file.is_file() or not cached_dataset_file.exists():
             return False
         try:
-            with open(file=self._preprocessed_dataset_file, mode="rb") as file:
-                preprocessed_dataset: SlidingWindowDataset = pickle.load(file)
-            assert self.config == preprocessed_dataset.config
+            with open(file=cached_dataset_file, mode="rb") as file:
+                cached_dataset: SlidingWindowDataset = pickle.load(file)
+            assert self.config == cached_dataset.config
             # Now, retrieve the cached data fields
-            self._valid_center_points = preprocessed_dataset._valid_center_points
-            self._idx__signal_int_index = preprocessed_dataset._idx__signal_int_index
-            self.ground_truth_series = preprocessed_dataset.ground_truth_series
-            self.respiratory_events = preprocessed_dataset.respiratory_events
-            self.sleep_stage_events = preprocessed_dataset.sleep_stage_events
-            self.signals = preprocessed_dataset.signals
+            self._valid_center_points = cached_dataset._valid_center_points
+            self._idx__signal_int_index = cached_dataset._idx__signal_int_index
+            self.ground_truth_series = cached_dataset.ground_truth_series
+            self.respiratory_events = cached_dataset.respiratory_events
+            self.sleep_stage_events = cached_dataset.sleep_stage_events
+            self.signals = cached_dataset.signals
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:  # We intentionally catch everything here!
