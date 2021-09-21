@@ -2,7 +2,7 @@ name: apnea-detection
 channels:
   - defaults
 dependencies:
-  - python>=3.8
+  - python>=3.9
   - pip
   - pytest
   - numpy
@@ -19,4 +19,4 @@ dependencies:
     - wfdb
 
 # --> Install PyTorch into existing environment using the following command:
-#     conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia
+#     conda install -y pytorch cudatoolkit=11.1 -c pytorch -c nvidia

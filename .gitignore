@@ -131,4 +131,4 @@ dmypy.json
 
 # Project-specific stuff
 .idea/*
-ai-based/results/*
+ai_based/results/*
