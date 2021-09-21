@@ -108,7 +108,7 @@ class Trainer:
             desc = f"Epoch {epoch_index+1}/{self.config['num_epochs']}"
             for i, batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
                 training_loss, training_output = training_session.train_batch(batch)
-                # aggregated_test_results = self._handle_logging(log_dict, training_session, training_loss, training_output, batch.ground_truth, i)
+                # aggregated_test_results = self._handle_logging(log_dict, training_session, training_loss, training_output, batch.ground_truth, i)  TODO
                 running_training_loss += training_loss
 
             # Epoch finished

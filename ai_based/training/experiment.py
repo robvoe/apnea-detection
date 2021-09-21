@@ -8,9 +8,9 @@ from typing import Optional
 import torch
 
 import ai_based.data_handling.ai_datasets
+from util.paths import RESULTS_PATH_AI
 from .trainer import Trainer
 from . import CHECKPOINT_FILENAME
-from util.paths import RESULTS_PATH_AI
 
 
 class Experiment:

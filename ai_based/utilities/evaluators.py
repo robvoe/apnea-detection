@@ -6,9 +6,6 @@ import torch
 import numpy as np
 import numba
 
-from .metrics.base import BaseMetric
-from .metrics.accuracy import AccuracyMetric
-from .metrics.confusion_matrix import ConfusionMatrixMetric
 from util.datasets import GroundTruthClass
 
 
@@ -17,8 +14,8 @@ class BaseEvaluator(ABC):
     def __init__(self, model_output_batch: Optional[torch.Tensor], ground_truth_batch: Optional[torch.Tensor]):
         """Constructs an Evaluator instance. All parameters should either contain values or be None."""
         assert (model_output_batch is None and ground_truth_batch is None) or \
-               (model_output_batch is not None and ground_truth_batch is not None), \
-               "Either both of the parameters 'model_output_batch' and 'ground_truth_batch' should hold values or be None!"
+            (model_output_batch is not None and ground_truth_batch is not None), \
+            "Either both of the parameters 'model_output_batch' and 'ground_truth_batch' should hold values or be None!"
 
     @classmethod
     def empty(cls) -> "BaseEvaluator":

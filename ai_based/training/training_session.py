@@ -35,14 +35,12 @@ class TrainingSession:
         overall_evaluator = self.evaluator_type.empty()
         self.model.eval()
         with torch.no_grad():
-            # started_at = datetime.now()
             for batch in tqdm(dataloader, desc=f"Testing model on {dataset_type} dataset", total=len(dataloader), leave=False, file=sys.stdout, position=0):
                 batch.to_device(self.device)
                 net_input = torch.autograd.Variable(batch.input_data)
                 net_output = self.model(net_input)
                 batch_evaluator = self.evaluator_type(model_output_batch=net_output, ground_truth_batch=batch.ground_truth)
                 overall_evaluator += batch_evaluator
-            # print(f"Testing model took {(datetime.now()-started_at).total_seconds():.1f}s")
         self.model.train()
         return overall_evaluator
 

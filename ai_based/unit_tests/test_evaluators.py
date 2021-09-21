@@ -48,7 +48,6 @@ def test_confusion_matrix_evaluator(small_batch):
         [1, 0, 1, 0, 0]
     ], dtype=int)
     np.testing.assert_equal(actual=evaluator.get_confusion_matrix(), desired=expected_confusion_matrix)
-    # torch.testing.assert_equal(actual=evaluator.get_confusion_matrix(), expected=expected_confusion_matrix)
 
 
 def test_performance():
@@ -62,7 +61,7 @@ def test_performance():
     durations = []
     for _ in range(n_cycles):
         started_at = datetime.now()
-        evaluator = ConfusionMatrixEvaluator(model_output_batch=model_output_batch, ground_truth_batch=gt_batch)  # 8.93 .. 8.95
+        evaluator = ConfusionMatrixEvaluator(model_output_batch=model_output_batch, ground_truth_batch=gt_batch)
         durations += [(datetime.now()-started_at).total_seconds()]
 
     print()
@@ -70,23 +69,3 @@ def test_performance():
     print(f"Total duration: {sum(durations):.2f}s")
     print(f"Mean duration per cycle: {sum(durations)/n_cycles*1000:.2f}ms")
     print(f"Median duration per cycle: {np.median(durations) * 1000:.2f}ms")
-
-def test_confusion_matrix_evaluator2():
-    model_output_batch = torch.tensor([
-        [0, 1, 0], [0, 1, 0], [0, 0, 1],   [1, 0, 0], [0, 1, 0], [0, 1, 0],   [0, 0, 1], [0, 1, 0], [0, 1, 0]
-    ])
-    gt_batch = torch.tensor([2, 2, 2, 1, 1, 1, 0, 0, 0])
-
-    evaluator = ConfusionMatrixEvaluator()
-    batch_result = evaluator(model_output_batch, gt_batch)
-    assert isinstance(batch_result, dict)
-    assert len(batch_result) == 1
-
-    aggregated_results = evaluator.aggregate_batch_results([batch_result])
-
-    class_based_precision = aggregated_results["confusion_matrix"]["class_based_precision"]
-    class_based_recall = aggregated_results["confusion_matrix"]["class_based_recall"]
-    torch.testing.assert_allclose(class_based_precision, expected=torch.tensor([0.0, 1/3, 0.5]), rtol=0.001, atol=0.001)
-    torch.testing.assert_allclose(class_based_recall, expected=torch.tensor([0.0, 2/3, 1/3]), rtol=0.001, atol=0.001)
-
-    short_performance_summary = evaluator.get_short_performance_summary(aggregated_results)
