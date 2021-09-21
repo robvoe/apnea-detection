@@ -4,13 +4,15 @@ from datetime import datetime as dt
 import os
 from pathlib import Path
 from threading import Event
-from typing import Optional
+from typing import Optional, Tuple
+from datetime import datetime
 
 import torch
 import torch.utils.data
 from tqdm import tqdm
 
 from ai_based.data_handling.training_batch import TrainingBatch
+from ai_based.utilities.evaluators import BaseEvaluator
 from .training_session import TrainingSession
 from . import CHECKPOINT_FILENAME
 
@@ -48,8 +50,8 @@ class Trainer:
         self.data_loader_test = torch.utils.data.DataLoader(test_dataset, batch_size_test, shuffle=False,
                                                             num_workers=config["num_loading_workers"],
                                                             collate_fn=TrainingBatch.from_iterable)
-        self.evaluator = config["evaluator_type"](**config["evaluator_args"])
         self.logged_batch_indices = self._calculate_logging_iterations()
+        self.evaluator_type: type = config["evaluator_type"]
 
     def train(self, model, hyperparams, save_dir: Path = None):
         """
@@ -83,18 +85,22 @@ class Trainer:
         training_start_time = dt.now()
         print("Time: ", training_start_time.strftime("%H:%M:%S"))
 
-        print("\nSetting things up...")
+        print()
+        print("Setting things up...")
         self._print_hyperparameters(hyperparams, self.config["interest_keys"], indent=1)
         log_dict = self._initialize_log_dict()
-        training_session = TrainingSession(model, self.evaluator, hyperparams)
+        training_session = TrainingSession(model, evaluator_type=self.evaluator_type, hyperparams=hyperparams)
 
-        print("\n\tChecking initial performance on test dataset:")
-        best_aggregated_test_results, eval_time = self._check_initial_performance(training_session)
+        print()
+        print("\tChecking initial performance on test dataset:")
+        started_at = datetime.now()
+        best_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
+        best_evaluator_test.print_exhausting_metrics_results(indent=2)
         best_weights = copy.deepcopy(model.state_dict())
-        self.evaluator.print_exhausting_metrics_results(best_aggregated_test_results, indent=2)
-        print(f"\t\tThat took {eval_time.microseconds // 1000} milliseconds.")
+        print(f"\tThat took {(datetime.now() - started_at).total_seconds():.2f}s")
 
-        print("\nAll set, let's get started!", flush=True)
+        print()
+        print("All set, let's get started!", flush=True)
         for epoch_index in range(self.config["num_epochs"]):
             epoch_start_time = dt.now()
             running_training_loss = 0.0
@@ -102,22 +108,23 @@ class Trainer:
             desc = f"Epoch {epoch_index+1}/{self.config['num_epochs']}"
             for i, batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
                 training_loss, training_output = training_session.train_batch(batch)
-                self._handle_logging(log_dict, training_session, training_loss, training_output, batch.ground_truth, i)
+                # aggregated_test_results = self._handle_logging(log_dict, training_session, training_loss, training_output, batch.ground_truth, i)
                 running_training_loss += training_loss
 
             # Epoch finished
             average_training_loss = running_training_loss / len(self.data_loader_training)
             training_session.scheduler_metric = average_training_loss
 
-            aggregated_test_results = training_session.test_model(dataloader=self.data_loader_test)
+            # if aggregated_test_results is None:
+            evaluator_test = training_session.test_model(dataloader=self.data_loader_test, dataset_type="test")
             if self.config["determine_train_dataset_performance"] is True:
-                aggregated_train_results = training_session.test_model(dataloader=self.data_loader_training)
+                evaluator_train = training_session.test_model(dataloader=self.data_loader_training, dataset_type="train")
 
             do_epoch_based_checkpointing = self.checkpointing_cyclic_epoch is not None and ((epoch_index+1) % self.checkpointing_cyclic_epoch) == 0
-            if self.evaluator.is_better_than(aggregated_test_results, best_aggregated_test_results) or do_epoch_based_checkpointing:
+            if evaluator_test > best_evaluator_test or do_epoch_based_checkpointing:
                 if do_epoch_based_checkpointing:
                     print("-> Cycle-based checkpointing")
-                best_aggregated_test_results = aggregated_test_results
+                best_evaluator_test = evaluator_test
                 best_weights = copy.deepcopy(model.state_dict())
                 log_dict["best_epoch_index"] = epoch_index
                 if self.checkpointing_enabled is True and save_dir is not None:
@@ -135,12 +142,12 @@ class Trainer:
                   f"  - Average training loss: {average_training_loss}\n"
                   f"  - Best epoch: {best_epoch_str}")
             print(f"  - Validation results on test data:\n"
-                  f"    + Short summary: {self.evaluator.get_short_performance_summary(aggregated_test_results)}\n"
-                  f"    + {aggregated_test_results}")
+                  f"    + Short summary: {evaluator_test.get_short_summary()}\n"
+                  f"    + {evaluator_test.get_scores_dict()}")
             if self.config["determine_train_dataset_performance"] is True:
                 print(f"  - Validation results on training data:\n"
-                      f"    + Short summary: {self.evaluator.get_short_performance_summary(aggregated_train_results)}\n"
-                      f"    + {aggregated_train_results}")
+                      f"    + Short summary: {evaluator_train.get_short_summary()}\n"
+                      f"    + {evaluator_train.get_scores_dict()}")
 
         # Training finished
         print()
@@ -148,16 +155,16 @@ class Trainer:
         print(f"Training finished. Obtaining{' and saving' if save_dir else ''} results..")
         print("Final validation performance:")
         model.load_state_dict(best_weights)
-        final_validation_eval_results = training_session.test_model(self.data_loader_test)
-        self.evaluator.print_exhausting_metrics_results(final_validation_eval_results, indent=1)
+        final_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
+        final_evaluator_test.print_exhausting_metrics_results(indent=1)
         print()
 
         if save_dir is not None:
             torch.save(log_dict, save_dir / "log.pt")
-            torch.save(final_validation_eval_results, save_dir / "eval.pt")
+            torch.save(final_evaluator_test.get_scores_dict(), save_dir / "eval.pt")
             torch.save(best_weights, save_dir / "weights.pt")
 
-        return log_dict, final_validation_eval_results, best_weights
+        return log_dict, final_evaluator_test.get_scores_dict(), best_weights
 
     def _calculate_logging_iterations(self):
         max_idx = len(self.data_loader_training) - 1
@@ -165,16 +172,11 @@ class Trainer:
         logging_iterations = [max_idx - log * interval for log in range(0, self.config["logging_frequency"])]
         return logging_iterations
 
-    def _check_initial_performance(self, session):
-        eval_start = dt.now()
-        validation_eval_results = session.test_model(self.data_loader_test)
-        eval_time = dt.now() - eval_start
-        return validation_eval_results, eval_time
-
     def _initialize_log_dict(self):
-        metrics_template = {metric.get_name(): [] for metric in self.evaluator.get_all_metrics()}
-        log = {"training": copy.deepcopy(metrics_template),
-               "validation": copy.deepcopy(metrics_template)}
+        evaluator_ = self.evaluator_type.empty()
+        scores_template = {score: [] for score in evaluator_.get_scores_dict().keys()}
+        log = {"training": copy.deepcopy(scores_template),
+               "test": copy.deepcopy(scores_template)}
         log["training"]["loss"] = []
         log["training"]["grad"] = []
         log["best_epoch_index"] = None
@@ -187,15 +189,16 @@ class Trainer:
         if self.config["log_grad"]:
             log_dict["training"]["grad"].append(self._sum_gradients(training_session.model))
 
+        aggregated_test_results = None
         if batch_index in self.logged_batch_indices:
             training_eval_results = self.evaluator(training_output, training_ground_truth)
-            aggregated_test_results = training_session.test_model(self.data_loader_test)
+            aggregated_test_results = training_session.test_model(self.data_loader_test, dataset_type="test")
 
-            for metric_name, value in training_eval_results.items():
-                log_dict["training"][metric_name].append(value)
+            for score_name, value in training_eval_results.items():
+                log_dict["training"][score_name].append(value)
 
-            for metric_name, value in aggregated_test_results.items():
-                log_dict["validation"][metric_name].append(value)
+            for score_name, value in aggregated_test_results.items():
+                log_dict["test"][score_name].append(value)
 
             if self.config["verbose"]:
                 print(f"Iteration {batch_index}/{len(self.data_loader_training)}: Loss: {training_loss:.2f}")
@@ -204,6 +207,7 @@ class Trainer:
                 print("\tValidation: ", end="")
                 self.evaluator.print_exhausting_metrics_results(aggregated_test_results, flat=True)
                 print()
+        return aggregated_test_results
 
     @staticmethod
     def _print_hyperparameters(hyperparams, keys, indent=0):

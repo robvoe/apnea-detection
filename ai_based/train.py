@@ -5,13 +5,17 @@ import pathlib
 import torch
 import torch.nn as nn
 import pandas as pd
+import numpy as np
 
 import ai_based.data_handling.ai_datasets as ai_datasets
 import ai_based.utilities.evaluators
-from ai_based.networks import MLP, Cnn1D, CompositionNet
+from ai_based.networks import MLP, Cnn1D
 from ai_based.training.experiment import Experiment
 from util.datasets import SlidingWindowDataset, GroundTruthClass
 from util.paths import DATA_PATH
+
+
+np.seterr(all='raise')
 
 
 experiment_config = {
@@ -60,15 +64,14 @@ del train_dataset, test_dataset
 trainer_config = {
     "num_epochs": 40,
     "batch_size": 1024,  # 128,
-    "batch_size_test": 1024,  # May be None
-    "determine_train_dataset_performance": True,  # Do we wish to determine model performance over train dataset at the end of each epoch? This, of course, takes time!
+    "batch_size_test": 2048,  # May be None
+    "determine_train_dataset_performance": False,  # Do we wish to determine model performance also _over train dataset at the end of each epoch? This, of course, takes time!
     "logging_frequency": 1,
     "log_loss": True,
     "log_grad": False,
     "verbose": False,
-    "num_loading_workers": 12,
+    "num_loading_workers": len(os.sched_getaffinity(0)) - 2,
     "evaluator_type": ai_based.utilities.evaluators.ConfusionMatrixEvaluator,
-    "evaluator_args": {},
     "interest_keys": [],  # Should stay empty, as used by analysis tools in later step
 }
 
@@ -97,10 +100,10 @@ base_hyperparameters = {
         input_tensor_shape=features_shape,
         output_tensor_shape=(len(GroundTruthClass), *gt_shape),
         hidden_layer_configs=[
+           MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-           MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
         ],
         last_layer_dropout=0.6,
         last_layer_use_batchnorm=True
@@ -155,10 +158,12 @@ def main():
     print(f"Training dataset:\n"
           f"  - class occurrences: {class_occurrences_train}\n"
           f"  - resulting (vanilla) class weights: {class_weights}\n"
+          f"\n"
           f"Test dataset:\n"
           f"  - class occurrences: {class_occurrences_test}\n"
           f"\n"
-          f"Input features shape:  {features_shape}")
+          f"Input features shape:  {features_shape}\n"
+          f"  Ground truth shape:  {gt_shape}")
     print()
 
     Experiment.SILENTLY_OVERWRITE_PREVIOUS_RESULTS = True

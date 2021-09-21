@@ -1,6 +1,11 @@
+import sys
 from datetime import datetime
+from typing import Dict
 
 import torch
+from tqdm import tqdm
+
+from ai_based.utilities.evaluators import BaseEvaluator
 
 
 class TrainingSession:
@@ -10,12 +15,12 @@ class TrainingSession:
     running the model"s forward/backward path, updating model parameters, run model in test mode and
     scheduling the learning rate.
     """
-    def __init__(self, model, evaluator, hyperparams):
+    def __init__(self, model, evaluator_type: type, hyperparams: Dict):
         if not type(hyperparams) is dict:
             raise Exception("Error: The passed config object is not a dictionary.")
         self.params = hyperparams
         self.model = model
-        self.evaluator = evaluator
+        self.evaluator_type = evaluator_type
         self.device = model.device
 
         self.loss_function = hyperparams["loss_function"].to(model.device)
@@ -25,20 +30,21 @@ class TrainingSession:
         if self.params["scheduler_requires_metric"]:
             self.scheduler_metric = float("inf")
 
-    def test_model(self, dataloader):
-        batchwise_results = []
+    def test_model(self, dataloader, dataset_type: str) -> BaseEvaluator:
+        assert dataset_type in ("train", "test")
+        overall_evaluator = self.evaluator_type.empty()
         self.model.eval()
         with torch.no_grad():
-            started_at = datetime.now()
-            for batch in dataloader:
+            # started_at = datetime.now()
+            for batch in tqdm(dataloader, desc=f"Testing model on {dataset_type} dataset", total=len(dataloader), leave=False, file=sys.stdout, position=0):
                 batch.to_device(self.device)
                 net_input = torch.autograd.Variable(batch.input_data)
                 net_output = self.model(net_input)
-                batchwise_results.append(self.evaluator(net_output, batch.ground_truth))
-            print(f"Testing model took {(datetime.now()-started_at).total_seconds():.1f}s")
+                batch_evaluator = self.evaluator_type(model_output_batch=net_output, ground_truth_batch=batch.ground_truth)
+                overall_evaluator += batch_evaluator
+            # print(f"Testing model took {(datetime.now()-started_at).total_seconds():.1f}s")
         self.model.train()
-        aggregated_batch_results = self.evaluator.aggregate_batch_results(batchwise_results)
-        return aggregated_batch_results
+        return overall_evaluator
 
     def schedule_learning_rate(self):
         if self.params["scheduler_requires_metric"]:
