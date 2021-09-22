@@ -88,20 +88,29 @@ class Experiment:
         del model
 
         # Now let's load the data
-        used_dataset_type = self.base_hyperparams["dataset_type"]
-        if not issubclass(used_dataset_type, ai_based.data_handling.ai_datasets.BaseAiDataset):
-            raise TypeError(f"Invalid dataset class specified: {used_dataset_type}")
-        training_dataset = used_dataset_type(config=self.base_hyperparams["train_dataset_config"])
-        test_dataset = used_dataset_type(config=self.base_hyperparams["test_dataset_config"])
-
-        trainer = Trainer(self.config["trainer"], training_dataset=training_dataset, test_dataset=test_dataset,
-                          checkpointing_enabled=self.config["experiment"]["checkpointing_enabled"],
-                          checkpointing_cyclic_epoch=self.config["experiment"]["checkpointing_cyclic_epoch"])
-
+        dataset_type = self.base_hyperparams["dataset_type"]
+        if dataset_type is not None:
+            if not issubclass(dataset_type, ai_based.data_handling.ai_datasets.BaseAiDataset):
+                raise TypeError(f"Invalid dataset class specified: {dataset_type}")
+            training_dataset = dataset_type(config=self.base_hyperparams["train_dataset_config"])
+            test_dataset = dataset_type(config=self.base_hyperparams["test_dataset_config"])
+            print("Successfully instantiated train & test datasets")
+        elif dataset_type is None:
+            assert all(_ in self.base_hyperparams for _ in ("train_dataset", "test_dataset"))
+            training_dataset = self.base_hyperparams["train_dataset"]
+            test_dataset = self.base_hyperparams["test_dataset"]
+            assert training_dataset is not None and test_dataset is not None
+            print("Using pre-instantiated train & test datasets")
+        else:
+            raise RuntimeError("We should never reach this point")
         self.config["experiment"]["train_set_size"] = len(training_dataset)
         self.config["experiment"]["test_set_size"] = len(test_dataset)
         print(f"train_dataset_size = {len(training_dataset):,}")
         print(f"test_dataset_size = {len(test_dataset):,}")
+
+        trainer = Trainer(self.config["trainer"], training_dataset=training_dataset, test_dataset=test_dataset,
+                          checkpointing_enabled=self.config["experiment"]["checkpointing_enabled"],
+                          checkpointing_cyclic_epoch=self.config["experiment"]["checkpointing_cyclic_epoch"])
 
         experiment_started_at = datetime.now()
         for combination_index, hyperparams in enumerate(combinations_of_configs):

@@ -1,5 +1,6 @@
 import abc
 import functools
+import os
 from collections import Counter
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -9,12 +10,16 @@ from typing import Dict, Tuple, List, Optional, Union, Iterable, NamedTuple
 from datetime import datetime
 from copy import deepcopy
 from pathlib import Path
+import multiprocessing as mp
 
+import numba
+import numba.typed
 import numpy as np
 import pytest
 import torch.utils.data
 import torch
 import pandas as pd
+from tqdm import tqdm
 
 from util.datasets.sliding_window import GroundTruthClass, SlidingWindowDataset
 from util.mathutil import normalize_robust
@@ -50,6 +55,14 @@ class AiDataset(BaseAiDataset):
       inference
     - applies preprocessing steps (normalizing etc.) to the features before outputting
     """
+    @staticmethod
+    def _load_check_dataset(dataset_folder: Path, sliding_window_dataset_config: SlidingWindowDataset.Config) -> SlidingWindowDataset:
+        ds_ = SlidingWindowDataset(config=sliding_window_dataset_config, dataset_folder=dataset_folder, allow_caching=True)
+        assert all([s in ds_.signals for s in FEATURE_SIGNAL_NAMES]), \
+            f"{SlidingWindowDataset.__name__} '{dataset_folder.name}' does not provide all necessary " \
+            f"signal names {FEATURE_SIGNAL_NAMES}; at least one out of them is missing!"
+        return ds_
+
     @dataclass
     class Config:
         sliding_window_dataset_config: SlidingWindowDataset.Config
@@ -61,26 +74,39 @@ class AiDataset(BaseAiDataset):
             assert all(s in FEATURE_SIGNAL_NAMES for s in self.normalize_signals), \
                 f"At least one of the given 'normalize_signals' is not contained in {FEATURE_SIGNAL_NAMES}!"
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, progress_message: str = "Loading and pre-processing dataset", n_processes: int = None):
+        """
+        Creates an AiDataset
+
+        @param config: Config to this AiDataset instance
+        @param progress_message: Message that shall be shown during dataset load/preprocessing
+        @param n_processes: Number of processes that shall be used for loading. If None, the number is
+                            automatically determined.
+        """
         super(AiDataset, self).__init__(config=config)
 
-        # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
-        self._sliding_window_datasets = []
-        for dataset_folder in self.config.dataset_folders:
-            sliding_window_dataset = SlidingWindowDataset(config=config.sliding_window_dataset_config,
-                                                          dataset_folder=dataset_folder, allow_caching=True)
-            assert all([s in sliding_window_dataset.signals for s in FEATURE_SIGNAL_NAMES]), \
-                f"{SlidingWindowDataset.__name__} '{sliding_window_dataset.config.dataset_folder.name}' " \
-                f"does not provide all necessary signal names {FEATURE_SIGNAL_NAMES}; at least one signal is missing!"
-            self._sliding_window_datasets += [sliding_window_dataset]
+        affinity: int = len(os.sched_getaffinity(0))
+        if n_processes is None:
+            n_processes = max(1, affinity - 1)
+        assert n_processes >= 1, f"Passed parameter 'n_processes' ({n_processes}) must be None, or at least 1!"
+        assert n_processes <= len(os.sched_getaffinity(0)), \
+            f"Passed parameter 'n_processes' ({n_processes}) is larger than maximum number of possible processes ({affinity})!"
 
-        # Now, let's take a look at the dataset lengths
-        self._sliding_window_datasets_lengths = [len(ds) for ds in self._sliding_window_datasets]
+        # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
+        with mp.Pool(processes=n_processes) as pool:
+            load_fn_ = functools.partial(self._load_check_dataset, sliding_window_dataset_config=config.sliding_window_dataset_config)
+            loading_results = list(tqdm(pool.imap(load_fn_, self.config.dataset_folders), desc=progress_message,
+                                        total=len(self.config.dataset_folders)))
+            self._sliding_window_datasets = loading_results
+
+        # Now, let's take a look at the dataset lengths. Here, for speed-up reasons in conjunction with
+        # our function '_resolve_index_helper', we make use of Numba lists
+        self._sliding_window_datasets_lengths = numba.typed.List()
+        [self._sliding_window_datasets_lengths.append(len(ds)) for ds in self._sliding_window_datasets]
         self._len = sum(self._sliding_window_datasets_lengths)
 
-        # Let's build-up the cache for function _resolve_index() for shorter execution times
-        _ = [self._resolve_index(i) for i in range(self._len)]
-        del _
+        # Pre-JIT our '_resolve_index_helper' function, for performance improvement
+        _ = self._resolve_index_helper(idx=0, sliding_window_dataset_lengths=self._sliding_window_datasets_lengths)
 
         # Pre-JIT our normalization method to save time when querying data in multi-process context
         normalize_robust(np.zeros(shape=(5,)))
@@ -98,18 +124,22 @@ class AiDataset(BaseAiDataset):
 
         return SlidingWindowTimestamps(center_point=window_data.center_point, features=features_index, ground_truth=gt_index)
 
-    @functools.cache
-    def _resolve_index(self, idx: int) -> Tuple[int, int]:
-        """Resolves a given index to sliding-window-dataset & dataset-internal index."""
-        assert 0 <= idx < len(self), "Index out of bounds"
+    @staticmethod
+    @numba.jit(nopython=True)
+    def _resolve_index_helper(idx: int, sliding_window_dataset_lengths: numba.typed.List) -> Tuple[int, int]:
         accumulated_dataset_lengths = 0
-        for dataset_index, dataset_length in enumerate(self._sliding_window_datasets_lengths):
+        for dataset_index, dataset_length in enumerate(sliding_window_dataset_lengths):
             previous_ = accumulated_dataset_lengths
             accumulated_dataset_lengths += dataset_length
             if previous_ <= idx < accumulated_dataset_lengths:
                 dataset_internal_index = idx - previous_
                 return dataset_index, dataset_internal_index
         raise RuntimeError("We shouldn't have ended up here!")
+
+    def _resolve_index(self, idx: int) -> Tuple[int, int]:
+        """Resolves a given index to sliding-window-dataset & dataset-internal index."""
+        assert 0 <= idx < len(self), "Index out of bounds"
+        return self._resolve_index_helper(idx=idx, sliding_window_dataset_lengths=self._sliding_window_datasets_lengths)
 
     def __getitem__(self, idx: int):
         assert -len(self) <= idx < len(self), "Index out of bounds"

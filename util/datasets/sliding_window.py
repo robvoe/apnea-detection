@@ -7,6 +7,7 @@ import pickle
 from enum import Enum
 import functools
 from collections import Counter
+import logging
 
 import pandas as pd
 import numpy as np
@@ -20,6 +21,9 @@ class GroundTruthClass(Enum):
     ObstructiveApnea = 2
     MixedApnea = 3
     Hypopnea = 4
+
+
+logger = logging.getLogger(__name__)
 
 
 # Translation table for   RespiratoryEventType -> GroundTruthClass
@@ -100,6 +104,7 @@ class SlidingWindowDataset:
         if allow_caching:
             success = self._try_read_cached_dataset(cached_dataset_file=cached_dataset_file)
             if success:
+                logging.debug(f"{dataset_folder.name}: Using pre-cached dataset")
                 return
 
         assert dataset_folder is not None, \
@@ -108,12 +113,17 @@ class SlidingWindowDataset:
             f"Given dataset folder '{dataset_folder.resolve()}' either not exists or is no folder."
 
         # Load the PhysioNet dataset from disk and apply some pre-processing
-        ds = read_physionet_dataset(dataset_folder=dataset_folder)
-        ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
-        self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
-        self.respiratory_events = ds.respiratory_events
-        self.sleep_stage_events = ds.sleep_stage_events
-        del ds
+        try:
+            ds = read_physionet_dataset(dataset_folder=dataset_folder)
+            ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
+            self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
+            self.respiratory_events = ds.respiratory_events
+            self.sleep_stage_events = ds.sleep_stage_events
+            del ds
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
+            raise RuntimeError(f"Error parsing/preprocessing PhysioNet dataset '{dataset_folder.name}'") from e
 
         # Some examinations
         assert self.signals.index[0] <= config.time_window_size < self.signals.index[-1], \

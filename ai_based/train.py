@@ -1,6 +1,6 @@
 import copy
 import os
-import pathlib
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -13,6 +13,7 @@ from ai_based.networks import MLP, Cnn1D
 from ai_based.training.experiment import Experiment
 from util.datasets import SlidingWindowDataset, GroundTruthClass
 from util.paths import DATA_PATH
+from util.subfolder_split import split_subfolder_list
 
 
 np.seterr(all='raise')
@@ -37,28 +38,30 @@ sliding_window_dataset_config = SlidingWindowDataset.Config(
     ground_truth_vector_width=11
 )
 
+data_folder = Path("~/Physionet2018/physionet.org/files/challenge-2018/1.0.0/training")
+# data_folder = DATA_PATH / "training"
+train_folders, test_folders = split_subfolder_list(folder=data_folder, split_ratio=0.7)
+
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
-    dataset_folders=[DATA_PATH / "training" / ds for ds in ("tr03-0005", "tr03-0289", "tr03-0921", "tr04-1078")],
+    dataset_folders=train_folders,
     noise_mean_std=(0, 0.4)
 )
 test_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
-    dataset_folders=[DATA_PATH / "training" / ds for ds in ("tr07-0168",)],
+    dataset_folders=test_folders,
     noise_mean_std=(0, 0.4),
 )
 
 # Pull some knowledge out of our train data set
-train_dataset = ai_datasets.AiDataset(config=training_dataset_config)
-test_dataset = ai_datasets.AiDataset(config=test_dataset_config)
+train_dataset = ai_datasets.AiDataset(config=training_dataset_config, progress_message="Loading train dataset samples")
+test_dataset = ai_datasets.AiDataset(config=test_dataset_config, progress_message="Loading test dataset samples")
 features_shape, gt_shape = train_dataset[0][0].shape, train_dataset[0][1].shape
 
 class_occurrences_train = train_dataset.get_gt_class_occurrences()
 class_occurrences_test = test_dataset.get_gt_class_occurrences()
 class_weights = [1 / class_occurrences_train[klass] for klass in class_occurrences_train.keys()]
 class_weights = torch.FloatTensor(class_weights)
-
-del train_dataset, test_dataset
 
 
 trainer_config = {
@@ -92,14 +95,17 @@ base_hyperparameters = {
         "patience": 1,
         "verbose": True
     },
-    "dataset_type": ai_datasets.AiDataset,
-    "train_dataset_config": training_dataset_config,
-    "test_dataset_config": test_dataset_config,
+    "train_dataset": train_dataset,
+    "test_dataset": test_dataset,
+    "dataset_type": None,  # ai_datasets.AiDataset,
+    "train_dataset_config": None,  # training_dataset_config,
+    "test_dataset_config": None,  # test_dataset_config,
     "model": MLP,
     "model_config": MLP.Config(
         input_tensor_shape=features_shape,
         output_tensor_shape=(len(GroundTruthClass), *gt_shape),
         hidden_layer_configs=[
+           MLP.Config.HiddenLayerConfig(out_features=10000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
            MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
