@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from threading import Event
 from typing import Optional, Tuple
-from datetime import datetime
+from decimal import Decimal
 
 import torch
 import torch.utils.data
@@ -93,30 +93,34 @@ class Trainer:
 
         print()
         print("\tChecking initial performance on test dataset:")
-        started_at = datetime.now()
+        started_at = dt.now()
         best_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
-        best_evaluator_test.print_exhausting_metrics_results(indent=2)
+        best_evaluator_test.print_exhausting_metrics_results(indent_tabs=2)
         best_weights = copy.deepcopy(model.state_dict())
-        print(f"\tThat took {(datetime.now() - started_at).total_seconds():.2f}s")
+        print(f"\tThat took {(dt.now() - started_at).total_seconds():.2f}s")
 
         print()
         print("All set, let's get started!", flush=True)
         for epoch_index in range(self.config["num_epochs"]):
             epoch_start_time = dt.now()
-            running_training_loss = 0.0
+            accumulated_training_loss = 0.0
             training_session.schedule_learning_rate()
             desc = f"Epoch {epoch_index+1}/{self.config['num_epochs']}"
-            for i, batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
-                training_loss, training_output = training_session.train_batch(batch)
-                # aggregated_test_results = self._handle_logging(log_dict, training_session, training_loss, training_output, batch.ground_truth, i)  TODO
-                running_training_loss += training_loss
+            evaluator_test = None
+            for i, training_batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
+                assert not torch.any(torch.isnan(training_batch.input_data))
+                assert not torch.any(torch.isnan(training_batch.ground_truth))
+                batch_training_loss, batch_training_output = training_session.train_batch(training_batch)
+                evaluator_test = self._handle_logging(log_dict, training_session, batch_training_loss, batch_training_output, training_batch.ground_truth, i)
+                assert not torch.isnan(batch_training_loss)
+                accumulated_training_loss += batch_training_loss
 
             # Epoch finished
-            average_training_loss = running_training_loss / len(self.data_loader_training)
+            average_training_loss = accumulated_training_loss / len(self.data_loader_training)
             training_session.scheduler_metric = average_training_loss
 
-            # if aggregated_test_results is None:
-            evaluator_test = training_session.test_model(dataloader=self.data_loader_test, dataset_type="test")
+            if evaluator_test is None:
+                evaluator_test = training_session.test_model(dataloader=self.data_loader_test, dataset_type="test")
             if self.config["determine_train_dataset_performance"] is True:
                 evaluator_train = training_session.test_model(dataloader=self.data_loader_training, dataset_type="train")
 
@@ -156,7 +160,7 @@ class Trainer:
         print("Final validation performance:")
         model.load_state_dict(best_weights)
         final_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
-        final_evaluator_test.print_exhausting_metrics_results(indent=1)
+        final_evaluator_test.print_exhausting_metrics_results(indent_tabs=1)
         print()
 
         if save_dir is not None:
@@ -174,7 +178,7 @@ class Trainer:
 
     def _initialize_log_dict(self):
         evaluator_ = self.evaluator_type.empty()
-        scores_template = {score: [] for score in evaluator_.get_scores_dict().keys()}
+        scores_template = {score_name: [] for score_name in evaluator_.get_scores_dict().keys()}
         log = {"training": copy.deepcopy(scores_template),
                "test": copy.deepcopy(scores_template)}
         log["training"]["loss"] = []
@@ -182,32 +186,31 @@ class Trainer:
         log["best_epoch_index"] = None
         return log
 
-    def _handle_logging(self, log_dict, training_session, training_loss, training_output, training_ground_truth, batch_index):
+    def _handle_logging(self, log_dict, training_session, training_loss, training_output, training_ground_truth, batch_index) -> Optional[BaseEvaluator]:
         if self.config["log_loss"]:
             log_dict["training"]["loss"].append(training_loss)
 
         if self.config["log_grad"]:
             log_dict["training"]["grad"].append(self._sum_gradients(training_session.model))
 
-        aggregated_test_results = None
+        test_dataset_evaluator = None
         if batch_index in self.logged_batch_indices:
-            training_eval_results = self.evaluator(training_output, training_ground_truth)
-            aggregated_test_results = training_session.test_model(self.data_loader_test, dataset_type="test")
-
-            for score_name, value in training_eval_results.items():
+            train_batch_evaluator = self.evaluator_type(model_output_batch=training_output, ground_truth_batch=training_ground_truth)
+            for score_name, value in train_batch_evaluator.get_scores_dict().items():
                 log_dict["training"][score_name].append(value)
 
-            for score_name, value in aggregated_test_results.items():
+            test_dataset_evaluator = training_session.test_model(self.data_loader_test, dataset_type="test")
+            for score_name, value in test_dataset_evaluator.get_scores_dict().items():
                 log_dict["test"][score_name].append(value)
 
             if self.config["verbose"]:
                 print(f"Iteration {batch_index}/{len(self.data_loader_training)}: Loss: {training_loss:.2f}")
-                print("\tTraining  : ", end="")
-                self.evaluator.print_exhausting_metrics_results(training_eval_results, flat=True)
-                print("\tValidation: ", end="")
-                self.evaluator.print_exhausting_metrics_results(aggregated_test_results, flat=True)
+                print("\tCurrent training batch : ", end="")
+                train_batch_evaluator.print_exhausting_metrics_results(flat=True)
+                print("\tTest dataset: ", end="")
+                test_dataset_evaluator.print_exhausting_metrics_results(flat=True)
                 print()
-        return aggregated_test_results
+        return test_dataset_evaluator
 
     @staticmethod
     def _print_hyperparameters(hyperparams, keys, indent=0):

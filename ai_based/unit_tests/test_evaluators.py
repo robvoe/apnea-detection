@@ -38,7 +38,7 @@ def test_confusion_matrix_evaluator(small_batch):
     evaluator = ConfusionMatrixEvaluator(model_output_batch=model_output_batch, ground_truth_batch=gt_batch)
     short_summary = evaluator.get_short_summary()
     print()
-    evaluator.print_exhausting_metrics_results(indent=2, flat=False)
+    evaluator.print_exhausting_metrics_results(indent_tabs=2, flat=False)
 
     expected_confusion_matrix = np.array([
         [1, 0, 0, 0, 2],
@@ -48,6 +48,21 @@ def test_confusion_matrix_evaluator(small_batch):
         [1, 0, 1, 0, 0]
     ], dtype=int)
     np.testing.assert_equal(actual=evaluator.get_confusion_matrix(), desired=expected_confusion_matrix)
+    assert np.isclose(evaluator.get_scores_dict()["class_based_precision"][0], 1/2, atol=0.0001)
+    assert np.isclose(evaluator.get_scores_dict()["class_based_precision"][1], 0, atol=0.0001)
+    assert np.isclose(evaluator.get_scores_dict()["class_based_precision"][2], 2/6, atol=0.0001)
+    assert np.isclose(evaluator.get_scores_dict()["class_based_precision"][3], 0, atol=0.0001)
+    assert np.isclose(evaluator.get_scores_dict()["class_based_precision"][4], 0/3, atol=0.0001)
+
+    two_evaluators = ConfusionMatrixEvaluator.empty() + evaluator + evaluator
+    expected_confusion_matrix = np.array([
+        [2, 0, 0, 0, 4],
+        [0, 0, 2, 0, 2],
+        [0, 0, 4, 0, 0],
+        [0, 0, 4, 0, 0],
+        [2, 0, 2, 0, 0]
+    ], dtype=int)
+    np.testing.assert_equal(actual=two_evaluators.get_confusion_matrix(), desired=expected_confusion_matrix)
 
 
 def test_performance():

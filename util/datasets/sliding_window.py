@@ -96,7 +96,9 @@ class SlidingWindowDataset:
         # Handle our path parameter logic
         assert dataset_folder is not None or cached_dataset_file is not None, \
             "At least one of both parameters 'dataset_folder' and 'cached_dataset_file' must contain a value!"
-        self.dataset_folder = dataset_folder
+        self.dataset_folder: Optional[Path] = dataset_folder
+        self.dataset_name: str = \
+            dataset_folder.name if dataset_folder is not None else f"{cached_dataset_file.parent.name}/{cached_dataset_file.stem}"
         if cached_dataset_file is None:
             cached_dataset_file = self.dataset_folder.resolve() / "preprocessed.pkl"
 
@@ -211,6 +213,7 @@ class SlidingWindowDataset:
             self.respiratory_events = cached_dataset.respiratory_events
             self.sleep_stage_events = cached_dataset.sleep_stage_events
             self.signals = cached_dataset.signals
+            del cached_dataset
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException:  # We intentionally catch everything here!
@@ -224,6 +227,7 @@ class SlidingWindowDataset:
 
         features = self.signals.iloc[center_point_index-int(self.config.time_window_size__index_steps/2):center_point_index+int(self.config.time_window_size__index_steps/2)+1]
         assert len(features) == self.config.time_window_size__index_steps
+        assert not np.any(np.isnan(features.values)), f"Oops, there's something NaN! dataset_name='{self.dataset_name}', idx={idx}"
 
         gt_series = None
         if self.has_ground_truth():
@@ -274,11 +278,12 @@ def test_sliding_window_dataset():
 
     config = SlidingWindowDataset.Config(
         downsample_frequency_hz=5,
-        time_window_size=pd.Timedelta("5 minutes"),
-        time_window_stride=11,
+        time_window_size=pd.to_timedelta("5 minutes"),
+        time_window_stride=5,  # 1
         ground_truth_vector_width=11
     )
-    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)
+    # sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"tr04-0808", allow_caching=True)
     len_ = len(sliding_window_dataset)
 
     gt_class_occurrences = sliding_window_dataset.gt_class_occurrences

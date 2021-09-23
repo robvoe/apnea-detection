@@ -7,6 +7,7 @@ import numpy as np
 import numba
 
 from util.datasets import GroundTruthClass
+from ai_based.utilities.print_helpers import pretty_print_dict
 
 
 class BaseEvaluator(ABC):
@@ -63,35 +64,22 @@ class BaseEvaluator(ABC):
             return True
         return my_score > other_score
 
-    def print_exhausting_metrics_results(self, indent: int = 0, flat: bool = False) -> None:
+    def print_exhausting_metrics_results(self, indent_tabs: int = 0, flat: bool = False) -> None:
         """
         Pretty-print the evaluation results.
 
-        :param indent: indent everything by a number of tabs
+        :param indent_tabs: indent everything by a number of tabs
         :param flat: print everything in one line if set to `True`
         """
-        def _print_inner(scores_dict_: Dict, indent_: int):
-            for score_, val_ in scores_dict_.items():
-                if (isinstance(val_, torch.Tensor) and val_.dim() == 1) or (isinstance(val_, np.ndarray) and val_.ndim == 1):
-                    vector_str = "   ".join([f"{v_:.4f}" for v_ in val_])
-                    print("\t" * indent_ + f"{score_}: {vector_str}")
-                elif (isinstance(val_, torch.Tensor) and val_.dim() != 0) or (isinstance(val_, np.ndarray) and val_.ndim != 0):
-                    print("\t" * indent_ + f"{score_}: {val_}")
-                elif isinstance(val_, dict):
-                    print("\t" * indent_ + f"{score_}:")
-                    _print_inner(val_, indent_=indent_+1)
-                else:
-                    print("\t" * indent_ + f"{score_}: {val_:.4f}")
-
         if flat:
-            s = "\t" * indent
+            s = "\t" * indent_tabs
             s += self.get_short_summary() + " -- "
             for score_name, result in self.get_scores_dict().items():
                 s += f"{score_name}: {result} | "
             print(s)
         else:
-            print("\t" * indent + f"Short summary: {self.get_short_summary()}")
-            _print_inner(self.get_scores_dict(), indent_=indent)
+            print("\t" * indent_tabs + f"+ Short summary: {self.get_short_summary()}")
+            pretty_print_dict(dict_=self.get_scores_dict(), indent_tabs=indent_tabs, line_prefix="+ ")
 
 
 class ConfusionMatrixEvaluator(BaseEvaluator):
@@ -116,7 +104,7 @@ class ConfusionMatrixEvaluator(BaseEvaluator):
         for gt_, pred_ in zip(ground_truth_samples, predicted_samples):
             confusion_matrix[gt_, pred_] += 1
 
-    def __add__(self, other: "BaseEvaluator") -> "BaseEvaluator":
+    def __add__(self, other: "BaseEvaluator") -> "ConfusionMatrixEvaluator":
         assert isinstance(other, ConfusionMatrixEvaluator)
         new_evaluator = ConfusionMatrixEvaluator.empty()
         new_evaluator.__confusion_matrix = self.__confusion_matrix + other.__confusion_matrix
@@ -131,11 +119,11 @@ class ConfusionMatrixEvaluator(BaseEvaluator):
             macro_f1_score = (macro_precision * macro_recall * 2) / (macro_precision + macro_recall)
             macro_f1_score = np.nan_to_num(macro_f1_score)
         return {
-            "class_based_precision": class_based_precision,
-            "class_based_recall": class_based_recall,
+            "macro_f1_score": macro_f1_score,
             "macro_precision": macro_precision,
             "macro_recall": macro_recall,
-            "macro_f1_score": macro_f1_score
+            "class_based_precision": class_based_precision,
+            "class_based_recall": class_based_recall,
         }
 
     def get_short_summary(self, padding: int = 3) -> str:

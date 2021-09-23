@@ -87,22 +87,28 @@ class Experiment:
         print(f"Number of model parameters = {model.num_parameters():,}")
         del model
 
-        # Now let's load the data
         dataset_type = self.base_hyperparams["dataset_type"]
-        if dataset_type is not None:
-            if not issubclass(dataset_type, ai_based.data_handling.ai_datasets.BaseAiDataset):
-                raise TypeError(f"Invalid dataset class specified: {dataset_type}")
+        if not issubclass(dataset_type, ai_based.data_handling.ai_datasets.BaseAiDataset):
+            raise TypeError(f"Invalid dataset class specified: {dataset_type}")
+
+        # Now let's load the data
+        print()
+        training_dataset = self.base_hyperparams["train_dataset"]
+        test_dataset = self.base_hyperparams["test_dataset"]
+        if training_dataset is None:
             training_dataset = dataset_type(config=self.base_hyperparams["train_dataset_config"])
-            test_dataset = dataset_type(config=self.base_hyperparams["test_dataset_config"])
-            print("Successfully instantiated train & test datasets")
-        elif dataset_type is None:
-            assert all(_ in self.base_hyperparams for _ in ("train_dataset", "test_dataset"))
-            training_dataset = self.base_hyperparams["train_dataset"]
-            test_dataset = self.base_hyperparams["test_dataset"]
-            assert training_dataset is not None and test_dataset is not None
-            print("Using pre-instantiated train & test datasets")
+            print("Successfully instantiated train dataset")
         else:
-            raise RuntimeError("We should never reach this point")
+            self.base_hyperparams["train_dataset"] = "Substitute for provided dataset"
+            print("Using pre-instantiated train dataset")
+
+        if test_dataset is None:
+            test_dataset = dataset_type(config=self.base_hyperparams["test_dataset_config"])
+            print("Successfully instantiated test dataset")
+        else:
+            self.base_hyperparams["test_dataset"] = "Substitute for provided dataset"
+            print("Using pre-instantiated test dataset")
+
         self.config["experiment"]["train_set_size"] = len(training_dataset)
         self.config["experiment"]["test_set_size"] = len(test_dataset)
         print(f"train_dataset_size = {len(training_dataset):,}")

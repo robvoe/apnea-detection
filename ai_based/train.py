@@ -1,6 +1,8 @@
 import copy
 import os
+import random
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -9,6 +11,7 @@ import numpy as np
 
 import ai_based.data_handling.ai_datasets as ai_datasets
 import ai_based.utilities.evaluators
+from ai_based.utilities.print_helpers import pretty_print_dict
 from ai_based.networks import MLP, Cnn1D
 from ai_based.training.experiment import Experiment
 from util.datasets import SlidingWindowDataset, GroundTruthClass
@@ -19,6 +22,11 @@ from util.subfolder_split import split_subfolder_list
 np.seterr(all='raise')
 
 
+data_folder = Path("~/Physionet2018/physionet.org/files/challenge-2018/1.0.0/training")
+# data_folder = DATA_PATH / "training"
+train_folders, test_folders = split_subfolder_list(folder=data_folder, split_ratio=0.8)
+
+
 experiment_config = {
     "name": f"test-experiment",
     "target_device": torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
@@ -26,7 +34,9 @@ experiment_config = {
     "checkpointing_enabled": True,
     "checkpointing_cyclic_epoch": 10,  # May be None. If set, we automatically take a checkpoint every N epochs.
     "n_repetitions": 1,
-    "deterministic_mode": False
+    "deterministic_mode": False,
+    "train_dataset_folders": train_folders,
+    "test_dataset_folders": test_folders
 }
 print(f"Target device: {experiment_config['target_device']}")
 
@@ -34,13 +44,9 @@ print(f"Target device: {experiment_config['target_device']}")
 sliding_window_dataset_config = SlidingWindowDataset.Config(
     downsample_frequency_hz=5,
     time_window_size=pd.to_timedelta("5 minutes"),
-    time_window_stride=1,  # 1
+    time_window_stride=5,  # 1
     ground_truth_vector_width=11
 )
-
-data_folder = Path("~/Physionet2018/physionet.org/files/challenge-2018/1.0.0/training")
-# data_folder = DATA_PATH / "training"
-train_folders, test_folders = split_subfolder_list(folder=data_folder, split_ratio=0.7)
 
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
@@ -54,26 +60,53 @@ test_dataset_config = ai_datasets.AiDataset.Config(
 )
 
 # Pull some knowledge out of our train data set
+print()
+print("Loading datasets")
 train_dataset = ai_datasets.AiDataset(config=training_dataset_config, progress_message="Loading train dataset samples")
 test_dataset = ai_datasets.AiDataset(config=test_dataset_config, progress_message="Loading test dataset samples")
-features_shape, gt_shape = train_dataset[0][0].shape, train_dataset[0][1].shape
+print("Successfully loaded datasets")
 
+features_shape, gt_shape = train_dataset[0][0].shape, train_dataset[0][1].shape
+print()
+print(f"Input features shape:  {features_shape}")
+print(f"  Ground truth shape:  {gt_shape}")
+
+print()
+print("Short train dataset performance test")
+durations = []
+for _ in range(1000):
+    started_at = datetime.now()
+    idx = random.randrange(0, len(train_dataset))
+    a, b = train_dataset[idx]
+    durations += [(datetime.now()-started_at).total_seconds()]
+print(f" - Median duration of a single index access: {np.median(durations)*1000:.2f}ms")
+print(f" - Mean duration of a single index access:   {np.mean(durations)*1000:.2f}ms")
+
+print()
+print("Determine class occurrences of datasets..")
 class_occurrences_train = train_dataset.get_gt_class_occurrences()
 class_occurrences_test = test_dataset.get_gt_class_occurrences()
 class_weights = [1 / class_occurrences_train[klass] for klass in class_occurrences_train.keys()]
 class_weights = torch.FloatTensor(class_weights)
+print(f" - Training dataset:")
+print(f"   + class occurrences:")
+pretty_print_dict(dict_=class_occurrences_train, indent_tabs=2, line_prefix="# ")
+print(f"   + resulting (vanilla) class weights: {class_weights}")
+print(f" - Test dataset:")
+print(f"   + class occurrences:")
+pretty_print_dict(dict_=class_occurrences_test, indent_tabs=2, line_prefix="# ")
 
 
 trainer_config = {
     "num_epochs": 40,
-    "batch_size": 1024,  # 128,
-    "batch_size_test": 2048,  # May be None
+    "batch_size": 4096,  # 128,
+    "batch_size_test": None,
     "determine_train_dataset_performance": False,  # Do we wish to determine model performance also _over train dataset at the end of each epoch? This, of course, takes time!
     "logging_frequency": 1,
     "log_loss": True,
     "log_grad": False,
     "verbose": False,
-    "num_loading_workers": len(os.sched_getaffinity(0)) - 2,
+    "num_loading_workers": len(os.sched_getaffinity(0)) - 1,
     "evaluator_type": ai_based.utilities.evaluators.ConfusionMatrixEvaluator,
     "interest_keys": [],  # Should stay empty, as used by analysis tools in later step
 }
@@ -84,7 +117,7 @@ base_hyperparameters = {
     "optimizer_args": {
         "betas": [0.9, 0.999],
         "eps": 1e-08,
-        "lr": 5e-4,  # 5e-4    It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
+        "lr": 5e-3,  # 5e-4    It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
         "weight_decay": 1e-3  # 5e-3
     },
     "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
@@ -95,11 +128,11 @@ base_hyperparameters = {
         "patience": 1,
         "verbose": True
     },
-    "train_dataset": train_dataset,
-    "test_dataset": test_dataset,
-    "dataset_type": None,  # ai_datasets.AiDataset,
-    "train_dataset_config": None,  # training_dataset_config,
-    "test_dataset_config": None,  # test_dataset_config,
+    "train_dataset": train_dataset,  # If None, we construct the train dataset during experiment
+    "test_dataset": test_dataset,  # If None, we construct the test dataset during experiment
+    "dataset_type": ai_datasets.AiDataset,
+    "train_dataset_config": training_dataset_config,
+    "test_dataset_config": test_dataset_config,
     "model": MLP,
     "model_config": MLP.Config(
         input_tensor_shape=features_shape,
@@ -161,15 +194,8 @@ base_hyperparameters = {
 
 
 def main():
-    print(f"Training dataset:\n"
-          f"  - class occurrences: {class_occurrences_train}\n"
-          f"  - resulting (vanilla) class weights: {class_weights}\n"
-          f"\n"
-          f"Test dataset:\n"
-          f"  - class occurrences: {class_occurrences_test}\n"
-          f"\n"
-          f"Input features shape:  {features_shape}\n"
-          f"  Ground truth shape:  {gt_shape}")
+    print()
+    print("-" * 15 + " Preparations finished. Let's start to train " + "-" * 15)
     print()
 
     Experiment.SILENTLY_OVERWRITE_PREVIOUS_RESULTS = True

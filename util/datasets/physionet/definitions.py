@@ -100,7 +100,7 @@ class PhysioNetDataset:
 
         sa_o2 = o.signals["SaO2"]
         sa_o2[sa_o2 <= 20.0] = np.NAN
-        sa_o2 = sa_o2.interpolate(method="linear")
+        sa_o2 = sa_o2.interpolate(method="linear").bfill().ffill()
         o.signals["SaO2"] = sa_o2
 
         o.signals["AIRFLOW"] = bandpass_wrapper(o.signals["AIRFLOW"], f_low_cutoff=0.03, f_high_cutoff=3)
