@@ -15,16 +15,19 @@ from ai_based.utilities.print_helpers import pretty_print_dict
 from ai_based.networks import MLP, Cnn1D
 from ai_based.training.experiment import Experiment
 from util.datasets import SlidingWindowDataset, GroundTruthClass
-from util.paths import DATA_PATH
-from util.subfolder_split import split_subfolder_list
+from util.paths import DATA_PATH, TRAIN_TEST_SPLIT_YAML
+from util.train_test_split import read_train_test_split_yaml, _split_subfolder_list
 
 
 np.seterr(all='raise')
 
 
 data_folder = Path("~/Physionet2018/physionet.org/files/challenge-2018/1.0.0/training")
-# data_folder = DATA_PATH / "training"
-train_folders, test_folders = split_subfolder_list(folder=data_folder, split_ratio=0.8)
+train_test_folders = read_train_test_split_yaml(input_yaml=TRAIN_TEST_SPLIT_YAML, prefix_base_folder=data_folder)
+train_folders, test_folders = train_test_folders.train, train_test_folders.test
+del train_test_folders
+
+# train_folders, test_folders = _split_subfolder_list(folder=DATA_PATH/"training", split_ratio=0.8, shuffle=False)
 
 
 experiment_config = {
@@ -39,6 +42,7 @@ experiment_config = {
     "test_dataset_folders": test_folders
 }
 print(f"Target device: {experiment_config['target_device']}")
+print(f"CPU cores available: {len(os.sched_getaffinity(0))}")
 
 
 sliding_window_dataset_config = SlidingWindowDataset.Config(
@@ -51,12 +55,12 @@ sliding_window_dataset_config = SlidingWindowDataset.Config(
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=train_folders,
-    noise_mean_std=(0, 0.4)
+    noise_mean_std=(0, 0.3)
 )
 test_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=test_folders,
-    noise_mean_std=(0, 0.4),
+    noise_mean_std=(0, 0.3),
 )
 
 # Pull some knowledge out of our train data set
@@ -89,12 +93,10 @@ class_occurrences_test = test_dataset.get_gt_class_occurrences()
 class_weights = [1 / class_occurrences_train[klass] for klass in class_occurrences_train.keys()]
 class_weights = torch.FloatTensor(class_weights)
 print(f" - Training dataset:")
-print(f"   + class occurrences:")
-pretty_print_dict(dict_=class_occurrences_train, indent_tabs=2, line_prefix="# ")
-print(f"   + resulting (vanilla) class weights: {class_weights}")
+pretty_print_dict(dict_=class_occurrences_train, indent_tabs=1, line_prefix="+ ")
+print(f"    --> resulting (vanilla) class weights: {class_weights}")
 print(f" - Test dataset:")
-print(f"   + class occurrences:")
-pretty_print_dict(dict_=class_occurrences_test, indent_tabs=2, line_prefix="# ")
+pretty_print_dict(dict_=class_occurrences_test, indent_tabs=1, line_prefix="+ ")
 
 
 trainer_config = {
@@ -138,11 +140,11 @@ base_hyperparameters = {
         input_tensor_shape=features_shape,
         output_tensor_shape=(len(GroundTruthClass), *gt_shape),
         hidden_layer_configs=[
-           MLP.Config.HiddenLayerConfig(out_features=10000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-           MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-           MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-           MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-           MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=10000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
         ],
         last_layer_dropout=0.6,
         last_layer_use_batchnorm=True

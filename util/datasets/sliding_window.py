@@ -275,6 +275,7 @@ class SlidingWindowDataset:
 
 def test_sliding_window_dataset():
     from util.paths import DATA_PATH
+    from util.mathutil import normalize_robust
 
     config = SlidingWindowDataset.Config(
         downsample_frequency_hz=5,
@@ -282,8 +283,7 @@ def test_sliding_window_dataset():
         time_window_stride=5,  # 1
         ground_truth_vector_width=11
     )
-    # sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)
-    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"tr04-0808", allow_caching=True)
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)
     len_ = len(sliding_window_dataset)
 
     gt_class_occurrences = sliding_window_dataset.gt_class_occurrences

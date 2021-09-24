@@ -156,11 +156,6 @@ class AiDataset(BaseAiDataset):
 
         gt = np.array([gt.value for gt in window_data.ground_truth], dtype=np.int)
 
-        # if np.any(np.isnan(features)) or np.any(np.isnan(gt)):
-        #     print(gt)
-        #     print(np.sum(np.isnan(features)))
-        #     print(features)
-
         # A few sanity checks
         assert not np.any(np.isnan(features)) and not np.any(np.isnan(gt)), \
             f"Oops, there's something NaN! idx={idx}, dataset_index={dataset_index}, dataset_internal_index=" \

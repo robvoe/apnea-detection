@@ -15,6 +15,7 @@ dependencies:
   - numba
   - scikit-learn
   - seaborn
+  - pyyaml
   - pip:
     - wfdb
 

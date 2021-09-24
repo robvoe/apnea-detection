@@ -46,10 +46,12 @@ class Trainer:
         self.data_loader_training = torch.utils.data.DataLoader(training_dataset, config["batch_size"], shuffle=True,
                                                                 num_workers=config["num_loading_workers"],
                                                                 collate_fn=TrainingBatch.from_iterable,
-                                                                drop_last=True)
+                                                                drop_last=True,
+                                                                persistent_workers=True)
         self.data_loader_test = torch.utils.data.DataLoader(test_dataset, batch_size_test, shuffle=False,
                                                             num_workers=config["num_loading_workers"],
-                                                            collate_fn=TrainingBatch.from_iterable)
+                                                            collate_fn=TrainingBatch.from_iterable,
+                                                            persistent_workers=True)
         self.logged_batch_indices = self._calculate_logging_iterations()
         self.evaluator_type: type = config["evaluator_type"]
 
@@ -95,7 +97,7 @@ class Trainer:
         print("\tChecking initial performance on test dataset:")
         started_at = dt.now()
         best_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
-        best_evaluator_test.print_exhausting_metrics_results(indent_tabs=2)
+        best_evaluator_test.print_exhausting_metrics_results(include_short_summary=True, indent_tabs=2)
         best_weights = copy.deepcopy(model.state_dict())
         print(f"\tThat took {(dt.now() - started_at).total_seconds():.2f}s")
 
@@ -145,13 +147,11 @@ class Trainer:
                   f"  - Epoch duration: {self._get_elapsed_time_str(epoch_start_time)}\n"
                   f"  - Average training loss: {average_training_loss}\n"
                   f"  - Best epoch: {best_epoch_str}")
-            print(f"  - Validation results on test data:\n"
-                  f"    + Short summary: {evaluator_test.get_short_summary()}\n"
-                  f"    + {evaluator_test.get_scores_dict()}")
+            print(f"  - Validation results on test data:")
+            evaluator_test.print_exhausting_metrics_results(include_short_summary=False, indent_tabs=1)
             if self.config["determine_train_dataset_performance"] is True:
-                print(f"  - Validation results on training data:\n"
-                      f"    + Short summary: {evaluator_train.get_short_summary()}\n"
-                      f"    + {evaluator_train.get_scores_dict()}")
+                print(f"  - Validation results on training data:")
+                evaluator_train.print_exhausting_metrics_results(include_short_summary=False, indent_tabs=1)
 
         # Training finished
         print()
@@ -160,7 +160,7 @@ class Trainer:
         print("Final validation performance:")
         model.load_state_dict(best_weights)
         final_evaluator_test = training_session.test_model(self.data_loader_test, dataset_type="test")
-        final_evaluator_test.print_exhausting_metrics_results(indent_tabs=1)
+        final_evaluator_test.print_exhausting_metrics_results(include_short_summary=True, indent_tabs=1)
         print()
 
         if save_dir is not None:

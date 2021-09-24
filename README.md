@@ -8,4 +8,4 @@ Apnea/hypopnea detector for polysomnographic data, specifically for the PhysioNe
 # Preparing Conda environment
 - conda env create --file environment.yml
 - conda activate apnea-detection
-- conda install pytorch cudatoolkit=11.1 -c pytorch -c nvidia
+- conda install -y pytorch cudatoolkit=11.1 -c pytorch -c nvidia

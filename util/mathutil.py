@@ -130,6 +130,8 @@ def normalize_robust(input: np.ndarray) -> np.ndarray:
     median = np.median(input)
     quartiles = np.quantile(input, q=(0.75, 0.25))
     inter_quartile_range = quartiles[0] - quartiles[1]
+    if np.equal(inter_quartile_range, 0.0):  # Important to avoid division by zero
+        inter_quartile_range = 1
     return (input-median)/inter_quartile_range
 
 
@@ -143,6 +145,13 @@ def test_normalize_robust():
     y = normalize_robust(x)
     assert np.isclose(inter_quartile_range(y), 1, atol=0.001)
     assert np.isclose(np.median(y), 0, atol=0.001)
+
+
+def test_normalize_robust__equal_input_values():
+    x = np.array([100] * 10)
+    y = normalize_robust(x)
+    assert not np.any(np.isnan(y))
+    assert np.allclose(y, 0.0)
 
 
 def test_cluster_1d_1():

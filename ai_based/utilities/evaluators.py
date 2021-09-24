@@ -64,21 +64,25 @@ class BaseEvaluator(ABC):
             return True
         return my_score > other_score
 
-    def print_exhausting_metrics_results(self, indent_tabs: int = 0, flat: bool = False) -> None:
+    def print_exhausting_metrics_results(self, include_short_summary: bool, indent_tabs: int = 0, flat: bool = False) -> None:
         """
         Pretty-print the evaluation results.
 
+        :@param include_short_summary: Denotes if also the short summary shall be printed out
         :param indent_tabs: indent everything by a number of tabs
         :param flat: print everything in one line if set to `True`
         """
         if flat:
             s = "\t" * indent_tabs
-            s += self.get_short_summary() + " -- "
+            if include_short_summary:
+                s += self.get_short_summary()
+            s += " -- "
             for score_name, result in self.get_scores_dict().items():
                 s += f"{score_name}: {result} | "
             print(s)
         else:
-            print("\t" * indent_tabs + f"+ Short summary: {self.get_short_summary()}")
+            if include_short_summary:
+                print("\t" * indent_tabs + f"+ Short summary: {self.get_short_summary()}")
             pretty_print_dict(dict_=self.get_scores_dict(), indent_tabs=indent_tabs, line_prefix="+ ")
 
 
