@@ -1,4 +1,5 @@
 import math
+import numpy
 from typing import List, NamedTuple, Optional
 from enum import Enum
 
@@ -127,12 +128,15 @@ def normalize_robust(input: np.ndarray) -> np.ndarray:
     @note
     This way of normalizing is much more robust towards outliers than normalization using mean and std-dev.
     """
-    median = np.median(input)
-    quartiles = np.quantile(input, q=(0.75, 0.25))
+    input_above_threshold = input[np.abs(input) >= 1e-10]  # That filter is necessary to be able to deal with "kaputt" data
+    if len(input_above_threshold) == 0:
+        return input.astype(numpy.float32)
+    median = np.median(input_above_threshold)
+    quartiles = np.quantile(input_above_threshold, q=(0.75, 0.25))
     inter_quartile_range = quartiles[0] - quartiles[1]
-    if np.equal(inter_quartile_range, 0.0):  # Important to avoid division by zero
+    if inter_quartile_range <= 1e-4:  # Important to avoid division by zero & unrealistic upscaling due to "kaputt" data
         inter_quartile_range = 1
-    return (input-median)/inter_quartile_range
+    return ((input-median)/inter_quartile_range).astype(numpy.float32)
 
 
 def test_normalize_robust():

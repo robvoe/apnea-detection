@@ -55,12 +55,14 @@ sliding_window_dataset_config = SlidingWindowDataset.Config(
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=train_folders,
-    noise_mean_std=(0, 0.3)
+    noise_mean_std=None,
+    lowpass_cutoff_factors={"SaO2": None, "ABD": 0.2, "CHEST": 0.2, "AIRFLOW": 0.1}
 )
 test_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=test_folders,
-    noise_mean_std=(0, 0.3),
+    noise_mean_std=None,
+    lowpass_cutoff_factors={"SaO2": None, "ABD": 0.2, "CHEST": 0.2, "AIRFLOW": 0.1}
 )
 
 # Pull some knowledge out of our train data set
@@ -103,7 +105,7 @@ trainer_config = {
     "num_epochs": 40,
     "batch_size": 4096,  # 128,
     "batch_size_test": None,
-    "determine_train_dataset_performance": False,  # Do we wish to determine model performance also _over train dataset at the end of each epoch? This, of course, takes time!
+    "determine_train_dataset_performance": True,  # Do we wish to determine model performance also _over train dataset at the end of each epoch? This, of course, takes time!
     "logging_frequency": 1,
     "log_loss": True,
     "log_grad": False,

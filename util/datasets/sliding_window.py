@@ -228,6 +228,7 @@ class SlidingWindowDataset:
         features = self.signals.iloc[center_point_index-int(self.config.time_window_size__index_steps/2):center_point_index+int(self.config.time_window_size__index_steps/2)+1]
         assert len(features) == self.config.time_window_size__index_steps
         assert not np.any(np.isnan(features.values)), f"Oops, there's something NaN! dataset_name='{self.dataset_name}', idx={idx}"
+        assert not np.any(np.isinf(features.values)), f"Oops, there's something inf! dataset_name='{self.dataset_name}', idx={idx}"
 
         gt_series = None
         if self.has_ground_truth():
@@ -236,9 +237,6 @@ class SlidingWindowDataset:
             assert not np.any(np.isnan(gt_numbers))
             gt_classes = [GroundTruthClass(int(g)) for g in gt_numbers]
             gt_series = pd.Series(data=gt_classes, index=gt_numbers.index, name="Ground truth")
-            # center_point__gt_class = self.ground_truth_vector.iloc[center_point__index]
-            # assert not np.isnan(center_point__gt_class)
-            # center_point__gt_class = GroundTruthClass(int(center_point__gt_class))
         return WindowData(signals=features, center_point=center_point_timedelta, ground_truth=gt_series)
 
     def __len__(self):
@@ -280,7 +278,7 @@ def test_sliding_window_dataset():
     config = SlidingWindowDataset.Config(
         downsample_frequency_hz=5,
         time_window_size=pd.to_timedelta("5 minutes"),
-        time_window_stride=5,  # 1
+        time_window_stride=5,
         ground_truth_vector_width=11
     )
     sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH/"training"/"tr03-0005", allow_caching=False)

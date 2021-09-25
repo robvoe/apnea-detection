@@ -1,8 +1,9 @@
 import abc
+import copy
 import functools
 import os
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 import pathlib
 import pickle
@@ -23,6 +24,7 @@ from tqdm import tqdm
 
 from util.datasets.sliding_window import GroundTruthClass, SlidingWindowDataset
 from util.mathutil import normalize_robust
+from util.filter import apply_butterworth_lowpass_filter
 
 
 SlidingWindowTimestamps = NamedTuple("SlidingWindowTimestamps", center_point=pd.Timedelta, features=pd.TimedeltaIndex, ground_truth=pd.TimedeltaIndex)
@@ -56,11 +58,18 @@ class AiDataset(BaseAiDataset):
     - applies preprocessing steps (normalizing etc.) to the features before outputting
     """
     @staticmethod
-    def _load_check_dataset(dataset_folder: Path, sliding_window_dataset_config: SlidingWindowDataset.Config) -> SlidingWindowDataset:
+    def _load_prepare_dataset(dataset_folder: Path, sliding_window_dataset_config: SlidingWindowDataset.Config, lowpass_factors: Dict[str, float]) -> SlidingWindowDataset:
         ds_ = SlidingWindowDataset(config=sliding_window_dataset_config, dataset_folder=dataset_folder, allow_caching=True)
         assert all([s in ds_.signals for s in FEATURE_SIGNAL_NAMES]), \
             f"{SlidingWindowDataset.__name__} '{dataset_folder.name}' does not provide all necessary " \
             f"signal names {FEATURE_SIGNAL_NAMES}; at least one out of them is missing!"
+        # Reduce signal complexity by applying lowpass filters
+        for signal_name, cutoff_factor in lowpass_factors.items():
+            if cutoff_factor is None:
+                continue
+            ds_.signals[signal_name] = apply_butterworth_lowpass_filter(data=ds_.signals[signal_name], f_cutoff=cutoff_factor, f_sample=1, filter_order=5)
+        assert not np.any(np.isnan(ds_.signals.values))
+        assert not np.any(np.isinf(ds_.signals.values))
         return ds_
 
     @dataclass
@@ -68,11 +77,19 @@ class AiDataset(BaseAiDataset):
         sliding_window_dataset_config: SlidingWindowDataset.Config
         dataset_folders: List[Path]
         noise_mean_std: Optional[Tuple[float, float]]
+        lowpass_cutoff_factors: Dict[str, Optional[float]] = \
+            field(default_factory=lambda: {"SaO2": None, "ABD": 0.2, "CHEST": 0.2, "AIRFLOW": 0.1})  # Prefilter parameter to reduce signal complexity
         normalize_signals: List[str] = ("AIRFLOW", "ABD", "CHEST")  # Denotes which of the signals should be normalized
 
         def __post_init__(self):
             assert all(s in FEATURE_SIGNAL_NAMES for s in self.normalize_signals), \
-                f"At least one of the given 'normalize_signals' is not contained in {FEATURE_SIGNAL_NAMES}!"
+                f"At least one of the given 'normalize_signals' is no member of the allowed signal set {FEATURE_SIGNAL_NAMES}!"
+            assert all(s in FEATURE_SIGNAL_NAMES for s in self.lowpass_cutoff_factors.keys()), \
+                f"At least one of the given 'lowpass_cutoff_factors' {list(self.lowpass_cutoff_factors.keys())} is " \
+                f"no member of the allowed signal set {FEATURE_SIGNAL_NAMES}"
+            # Provide lowpass-factors for each of the feature signals
+            lp = {s: self.lowpass_cutoff_factors[s] if s in self.lowpass_cutoff_factors else None for s in FEATURE_SIGNAL_NAMES}
+            self.lowpass_cutoff_factors = lp
 
     def __init__(self, config: Config, progress_message: str = "Loading and pre-processing dataset", n_processes: int = None):
         """
@@ -94,10 +111,10 @@ class AiDataset(BaseAiDataset):
 
         # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
         with mp.Pool(processes=n_processes) as pool:
-            load_fn_ = functools.partial(self._load_check_dataset, sliding_window_dataset_config=config.sliding_window_dataset_config)
+            load_fn_ = functools.partial(self._load_prepare_dataset, sliding_window_dataset_config=config.sliding_window_dataset_config, lowpass_factors=config.lowpass_cutoff_factors)
             loading_results = list(tqdm(pool.imap(load_fn_, self.config.dataset_folders), desc=progress_message,
                                         total=len(self.config.dataset_folders)))
-            self._sliding_window_datasets = loading_results
+            self._sliding_window_datasets: List[SlidingWindowDataset] = loading_results
 
         # Now, let's take a look at the dataset lengths. Here, for speed-up reasons in conjunction with
         # our function '_resolve_index_helper', we make use of Numba lists
@@ -156,13 +173,8 @@ class AiDataset(BaseAiDataset):
 
         gt = np.array([gt.value for gt in window_data.ground_truth], dtype=np.int)
 
-        # A few sanity checks
-        assert not np.any(np.isnan(features)) and not np.any(np.isnan(gt)), \
-            f"Oops, there's something NaN! idx={idx}, dataset_index={dataset_index}, dataset_internal_index=" \
-            f"{dataset_internal_index}, dataset_name='{self._sliding_window_datasets[dataset_index].dataset_name}'"
-
         # Convert samples into tensors
-        features_tensor = torch.from_numpy(features).type(torch.float)
+        features_tensor = torch.from_numpy(features).type(torch.float32)
         gt_tensor = torch.tensor(gt, dtype=torch.long)
 
         # Add noise
@@ -170,6 +182,14 @@ class AiDataset(BaseAiDataset):
             noise = torch.normal(mean=self.config.noise_mean_std[0], std=self.config.noise_mean_std[1],
                                  size=features_tensor.size())
             features_tensor += noise
+
+        # A few sanity checks before releasing the data to the outside world
+        assert not torch.any(torch.isnan(features_tensor)) and not torch.any(torch.isnan(features_tensor)), \
+            f"Oops, there's something NaN! idx={idx}, dataset_index={dataset_index}, dataset_internal_index=" \
+            f"{dataset_internal_index}, dataset_name='{self._sliding_window_datasets[dataset_index].dataset_name}'"
+        assert not torch.any(torch.isinf(features_tensor)) and not torch.any(torch.isinf(features_tensor)), \
+            f"Oops, there's something inf! idx={idx}, dataset_index={dataset_index}, dataset_internal_index=" \
+            f"{dataset_internal_index}, dataset_name='{self._sliding_window_datasets[dataset_index].dataset_name}'"
 
         return features_tensor, gt_tensor
 

@@ -50,15 +50,33 @@ class TrainingSession:
         else:
             self.scheduler.step()
 
-    def train_batch(self, batch):
-        batch.to_device(self.device)
+    def train_batch(self, training_batch):
+        # Perform a few sanity checks. This helps debugging, totally!
+        assert not torch.any(torch.isnan(training_batch.input_data))
+        assert not torch.any(torch.isinf(training_batch.input_data))
+        assert not torch.any(torch.isnan(training_batch.ground_truth))
+        assert not torch.any(torch.isinf(training_batch.ground_truth))
+
+        training_batch.to_device(self.device)
         self.optimizer.zero_grad()
 
-        net_input = torch.autograd.Variable(batch.input_data)
+        net_input = torch.autograd.Variable(training_batch.input_data)
         net_output = self.model(net_input)
 
-        loss = self._backward_and_optimize(net_output, batch.ground_truth)
+        loss = self._backward_and_optimize(net_output, training_batch.ground_truth)
 
+        if torch.isnan(loss):
+            print(net_input.shape)
+            print(net_output.shape)
+            print(training_batch.ground_truth.shape)
+            print(torch.any(torch.isnan(net_input)))
+            print(torch.any(torch.isnan(net_output)))
+            print(torch.any(torch.isnan(training_batch.ground_truth)))
+            print(torch.any(torch.isinf(net_input)))
+            print(torch.any(torch.isinf(net_output)))
+            print(torch.any(torch.isinf(training_batch.ground_truth)))
+        assert not torch.any(torch.isnan(loss))
+        assert not torch.any(torch.isinf(loss))
         return loss, net_output
 
     def _backward_and_optimize(self, net_output, ground_truth):

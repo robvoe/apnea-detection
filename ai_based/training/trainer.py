@@ -100,6 +100,7 @@ class Trainer:
         best_evaluator_test.print_exhausting_metrics_results(include_short_summary=True, indent_tabs=2)
         best_weights = copy.deepcopy(model.state_dict())
         print(f"\tThat took {(dt.now() - started_at).total_seconds():.2f}s")
+        # best_evaluator_test = self.evaluator_type.empty()
 
         print()
         print("All set, let's get started!", flush=True)
@@ -110,11 +111,10 @@ class Trainer:
             desc = f"Epoch {epoch_index+1}/{self.config['num_epochs']}"
             evaluator_test = None
             for i, training_batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
-                assert not torch.any(torch.isnan(training_batch.input_data))
-                assert not torch.any(torch.isnan(training_batch.ground_truth))
                 batch_training_loss, batch_training_output = training_session.train_batch(training_batch)
-                evaluator_test = self._handle_logging(log_dict, training_session, batch_training_loss, batch_training_output, training_batch.ground_truth, i)
                 assert not torch.isnan(batch_training_loss)
+                assert not torch.isinf(batch_training_loss)
+                evaluator_test = self._handle_logging(log_dict, training_session, batch_training_loss, batch_training_output, training_batch.ground_truth, i)
                 accumulated_training_loss += batch_training_loss
 
             # Epoch finished
