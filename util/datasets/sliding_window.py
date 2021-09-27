@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 # Translation table for   RespiratoryEventType -> GroundTruthClass
-_RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS = {RespiratoryEventType.CentralApnea: GroundTruthClass.CentralApnea,
-                                               RespiratoryEventType.MixedApnea: GroundTruthClass.MixedApnea,
-                                               RespiratoryEventType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
-                                               RespiratoryEventType.Hypopnea: GroundTruthClass.Hypopnea}
+RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS = {RespiratoryEventType.CentralApnea: GroundTruthClass.CentralApnea,
+                                              RespiratoryEventType.MixedApnea: GroundTruthClass.MixedApnea,
+                                              RespiratoryEventType.ObstructiveApnea: GroundTruthClass.ObstructiveApnea,
+                                              RespiratoryEventType.Hypopnea: GroundTruthClass.Hypopnea}
 assert len(RespiratoryEventType) == len(GroundTruthClass)-1, \
     f"There seems at least one class to be missing in either of the types {RespiratoryEventType.__name__} or {GroundTruthClass.__name__}"
 
@@ -118,7 +118,7 @@ class SlidingWindowDataset:
         try:
             ds = read_physionet_dataset(dataset_folder=dataset_folder)
             ds = ds.pre_clean().downsample(target_frequency=config.downsample_frequency_hz)
-            self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]]
+            self.signals = ds.signals[["ABD", "CHEST", "AIRFLOW", "SaO2"]].astype(np.float32)
             self.respiratory_events = ds.respiratory_events
             self.sleep_stage_events = ds.sleep_stage_events
             del ds
@@ -179,9 +179,9 @@ class SlidingWindowDataset:
         for event in respiratory_events:
             start_idx = signals_time_index.get_loc(key=event.start, method="nearest")
             end_idx = signals_time_index.get_loc(key=event.end, method="nearest")
-            assert event.event_type in _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS.keys(), \
+            assert event.event_type in RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS.keys(), \
                 f"{event.event_type.name} seems not present in above dictionary (and likely in GroundTruthClass)"
-            gt_class = _RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS[event.event_type]
+            gt_class = RESPIRATORY_EVENT_TYPE__GROUND_TRUTH_CLASS[event.event_type]
             gt_vector[start_idx:end_idx] = gt_class.value
 
         gt_series = pd.Series(data=gt_vector, index=signals_time_index, dtype="uint8")

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 import pathlib
 import pickle
-from typing import Dict, Tuple, List, Optional, Union, Iterable, NamedTuple
+from typing import Dict, Tuple, List, Optional, Union, Iterable, NamedTuple, Any
 from datetime import datetime
 from copy import deepcopy
 from pathlib import Path
@@ -23,13 +23,15 @@ import pandas as pd
 from tqdm import tqdm
 
 from util.datasets.sliding_window import GroundTruthClass, SlidingWindowDataset
-from util.mathutil import normalize_robust
+from util.mathutil import normalize_robust, PeakType
 from util.filter import apply_butterworth_lowpass_filter
+from util.mathutil import get_peaks
 
 
-SlidingWindowTimestamps = NamedTuple("SlidingWindowTimestamps", center_point=pd.Timedelta, features=pd.TimedeltaIndex, ground_truth=pd.TimedeltaIndex)
+SlidingWindowTimestamps = NamedTuple("SlidingWindowTimestamps", dataset_index=int, center_point=pd.Timedelta, features=pd.TimedeltaIndex, ground_truth=pd.TimedeltaIndex)
 
 FEATURE_SIGNAL_NAMES = ("SaO2", "ABD", "CHEST", "AIRFLOW")  # The signals that end up in the outputted feature map
+NORMALIZE_SIGNAL_NAMES = ("ABD", "CHEST", "AIRFLOW")  # Signals that we wish to normalize at window level
 
 
 class BaseAiDataset(torch.utils.data.Dataset, ABC):
@@ -37,7 +39,8 @@ class BaseAiDataset(torch.utils.data.Dataset, ABC):
         self.config = config
     
     @abstractmethod
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Tuple[torch.Tensor, Any, int]:
+        """Returns a Tuple of three elements:  features, ground truth, sample index"""
         pass
 
     @abstractmethod
@@ -58,18 +61,31 @@ class AiDataset(BaseAiDataset):
     - applies preprocessing steps (normalizing etc.) to the features before outputting
     """
     @staticmethod
-    def _load_prepare_dataset(dataset_folder: Path, sliding_window_dataset_config: SlidingWindowDataset.Config, lowpass_factors: Dict[str, float]) -> SlidingWindowDataset:
+    def _load_prepare_dataset(dataset_folder: Path, sliding_window_dataset_config: SlidingWindowDataset.Config) -> SlidingWindowDataset:
         ds_ = SlidingWindowDataset(config=sliding_window_dataset_config, dataset_folder=dataset_folder, allow_caching=True)
         assert all([s in ds_.signals for s in FEATURE_SIGNAL_NAMES]), \
             f"{SlidingWindowDataset.__name__} '{dataset_folder.name}' does not provide all necessary " \
             f"signal names {FEATURE_SIGNAL_NAMES}; at least one out of them is missing!"
-        # Reduce signal complexity by applying lowpass filters
-        for signal_name, cutoff_factor in lowpass_factors.items():
-            if cutoff_factor is None:
-                continue
-            ds_.signals[signal_name] = apply_butterworth_lowpass_filter(data=ds_.signals[signal_name], f_cutoff=cutoff_factor, f_sample=1, filter_order=5)
-        assert not np.any(np.isnan(ds_.signals.values))
-        assert not np.any(np.isinf(ds_.signals.values))
+        # Reduce signal complexity by determining hull curve of our alternating signals. Therefore we use "get_peak"
+        for signal_name in ("ABD", "CHEST", "AIRFLOW"):
+            # Pre-filter our signal with, to provide a bit more stable peak-detection
+            prefiltered_signal_array = apply_butterworth_lowpass_filter(data=ds_.signals[signal_name].values, f_cutoff=0.1, f_sample=1, filter_order=5)
+            filter_kernel_width = int(sliding_window_dataset_config.downsample_frequency_hz * 0.7)
+            peaks_list = get_peaks(waveform=prefiltered_signal_array, filter_kernel_width=filter_kernel_width)
+            # Create an empty NaN-array and fill in the absolute magnitudes at each peak's center point
+            peakified_signal_array = np.zeros(shape=prefiltered_signal_array.shape, dtype=np.float)
+            if len(peaks_list) <= 2:
+                pass  # This covers the -very unlikely yet present- case that the signal has no peaks (e.g. 07-0709)
+            else:
+                peakified_signal_array[:] = np.nan
+                for p in peaks_list:
+                    peakified_signal_array[p.center] = np.abs(p.extreme_value)
+            # Now, let's interpolate the NaNs in between the points
+            peakified_signal_series = pd.Series(data=peakified_signal_array, index=ds_.signals.index, dtype=np.float32)
+            peakified_signal_series = peakified_signal_series.interpolate(method="linear").bfill().ffill()
+            ds_.signals[signal_name] = peakified_signal_series
+        assert not np.any(np.isnan(ds_.signals.values)), f"Oops, there's a NaN value in dataset '{dataset_folder.name}'"
+        assert not np.any(np.isinf(ds_.signals.values)), f"Oops, there's a inf value in dataset '{dataset_folder.name}'"
         return ds_
 
     @dataclass
@@ -77,19 +93,6 @@ class AiDataset(BaseAiDataset):
         sliding_window_dataset_config: SlidingWindowDataset.Config
         dataset_folders: List[Path]
         noise_mean_std: Optional[Tuple[float, float]]
-        lowpass_cutoff_factors: Dict[str, Optional[float]] = \
-            field(default_factory=lambda: {"SaO2": None, "ABD": 0.2, "CHEST": 0.2, "AIRFLOW": 0.1})  # Prefilter parameter to reduce signal complexity
-        normalize_signals: List[str] = ("AIRFLOW", "ABD", "CHEST")  # Denotes which of the signals should be normalized
-
-        def __post_init__(self):
-            assert all(s in FEATURE_SIGNAL_NAMES for s in self.normalize_signals), \
-                f"At least one of the given 'normalize_signals' is no member of the allowed signal set {FEATURE_SIGNAL_NAMES}!"
-            assert all(s in FEATURE_SIGNAL_NAMES for s in self.lowpass_cutoff_factors.keys()), \
-                f"At least one of the given 'lowpass_cutoff_factors' {list(self.lowpass_cutoff_factors.keys())} is " \
-                f"no member of the allowed signal set {FEATURE_SIGNAL_NAMES}"
-            # Provide lowpass-factors for each of the feature signals
-            lp = {s: self.lowpass_cutoff_factors[s] if s in self.lowpass_cutoff_factors else None for s in FEATURE_SIGNAL_NAMES}
-            self.lowpass_cutoff_factors = lp
 
     def __init__(self, config: Config, progress_message: str = "Loading and pre-processing dataset", n_processes: int = None):
         """
@@ -104,14 +107,16 @@ class AiDataset(BaseAiDataset):
 
         affinity: int = len(os.sched_getaffinity(0))
         if n_processes is None:
-            n_processes = max(1, affinity - 1)
+            n_processes = max(1, int(affinity/2))
         assert n_processes >= 1, f"Passed parameter 'n_processes' ({n_processes}) must be None, or at least 1!"
         assert n_processes <= len(os.sched_getaffinity(0)), \
             f"Passed parameter 'n_processes' ({n_processes}) is larger than maximum number of possible processes ({affinity})!"
 
         # Let's load the underlying SlidingWindowDatasets and check if all signals are provided
+        # self._load_prepare_dataset(dataset_folder=self.config.dataset_folders[0], sliding_window_dataset_config=config.sliding_window_dataset_config)
+        get_peaks(waveform=np.array([-1, 0, 1, 0]), filter_kernel_width=2)  # Pre-JIT get_peaks to improve performance
         with mp.Pool(processes=n_processes) as pool:
-            load_fn_ = functools.partial(self._load_prepare_dataset, sliding_window_dataset_config=config.sliding_window_dataset_config, lowpass_factors=config.lowpass_cutoff_factors)
+            load_fn_ = functools.partial(self._load_prepare_dataset, sliding_window_dataset_config=config.sliding_window_dataset_config)
             loading_results = list(tqdm(pool.imap(load_fn_, self.config.dataset_folders), desc=progress_message,
                                         total=len(self.config.dataset_folders)))
             self._sliding_window_datasets: List[SlidingWindowDataset] = loading_results
@@ -139,7 +144,7 @@ class AiDataset(BaseAiDataset):
         features_index, gt_index = window_data.signals.index, window_data.ground_truth.index
         assert isinstance(features_index, pd.TimedeltaIndex) and isinstance(gt_index, pd.TimedeltaIndex)
 
-        return SlidingWindowTimestamps(center_point=window_data.center_point, features=features_index, ground_truth=gt_index)
+        return SlidingWindowTimestamps(dataset_index=dataset_index, center_point=window_data.center_point, features=features_index, ground_truth=gt_index)
 
     @staticmethod
     @numba.jit(nopython=True)
@@ -168,7 +173,7 @@ class AiDataset(BaseAiDataset):
         features = np.zeros(shape=(len(FEATURE_SIGNAL_NAMES), len(window_data.signals)), dtype=np.float)
         for i, signal_name in enumerate(FEATURE_SIGNAL_NAMES):
             raw_signal_data = window_data.signals[signal_name].values
-            data = raw_signal_data if signal_name not in self.config.normalize_signals else normalize_robust(raw_signal_data)
+            data = raw_signal_data if signal_name not in NORMALIZE_SIGNAL_NAMES else normalize_robust(raw_signal_data, center=False, scale=True)
             features[i, :] = data
 
         gt = np.array([gt.value for gt in window_data.ground_truth], dtype=np.int)
@@ -191,7 +196,7 @@ class AiDataset(BaseAiDataset):
             f"Oops, there's something inf! idx={idx}, dataset_index={dataset_index}, dataset_internal_index=" \
             f"{dataset_internal_index}, dataset_name='{self._sliding_window_datasets[dataset_index].dataset_name}'"
 
-        return features_tensor, gt_tensor
+        return features_tensor, gt_tensor, idx
 
     def __len__(self):
         return self._len
@@ -231,7 +236,7 @@ def test_development(ai_dataset_provider):
     len_ = len(ai_dataset)
     ground_truth_occurrences = ai_dataset.get_gt_class_occurrences()
 
-    features, gt = ai_dataset[0]
+    features, gt, sample_idx = ai_dataset[0]
     pass
 
 
@@ -244,7 +249,7 @@ def test_performance(ai_dataset_provider):
     started_at = datetime.now()
     for c in range(n_cycles):
         for i in range(len(ai_dataset)):
-            features, gt = ai_dataset[i]
+            features, gt, sample_idx = ai_dataset[i]
     duration_seconds = (datetime.now()-started_at).total_seconds()
 
     print()

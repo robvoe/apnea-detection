@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 
 from ai_based.utilities.evaluators import BaseEvaluator
+from ai_based.data_handling.training_batch import BaseTrainingBatch
 
 
 class TrainingSession:
@@ -50,7 +51,7 @@ class TrainingSession:
         else:
             self.scheduler.step()
 
-    def train_batch(self, training_batch):
+    def train_batch(self, training_batch: BaseTrainingBatch):
         # Perform a few sanity checks. This helps debugging, totally!
         assert not torch.any(torch.isnan(training_batch.input_data))
         assert not torch.any(torch.isinf(training_batch.input_data))

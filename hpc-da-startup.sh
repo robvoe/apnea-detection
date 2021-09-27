@@ -18,3 +18,5 @@ then
 fi
 
 conda activate $ENV_NAME
+conda deactivate
+conda activate $ENV_NAME

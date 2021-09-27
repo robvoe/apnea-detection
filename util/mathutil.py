@@ -38,6 +38,7 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
     filtered_waveform = filtered_waveform[int(filter_kernel_width/2) - 1:-math.ceil(filter_kernel_width/2)]
     if len(filtered_waveform) != len(waveform):
         raise AssertionError(f"There is a length mismatch in filtered and original waveform. Needs some rework!")
+    filtered_waveform[filtered_waveform == -0.0] = 0.0
 
     # Align our filtered waveform with the original signal
     shift = int(-filter_kernel_width / 4)
@@ -62,14 +63,18 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
         position_neg = zero_crosses_neg[0] if len(zero_crosses_neg) != 0 else None
         if position_neg is None or (position_pos is not None and position_pos < position_neg):
             if last_zero_cross_type is not None and last_zero_cross_type == ZeroCrossType.Positive:
-                raise AssertionError("Consecutive positive zero crosses of the same type are not supported!")
-            zero_crosses.append(ZeroCross(type=ZeroCrossType.Positive, position=position_pos))
+                pass  # We're facing consecutive positive zero crosses. That's insane, isn't it? ;-)
+                # raise AssertionError("Consecutive positive zero crosses of the same type are not supported!")
+            else:
+                zero_crosses.append(ZeroCross(type=ZeroCrossType.Positive, position=position_pos))
             zero_crosses_pos = zero_crosses_pos[1:]
             last_zero_cross_type = ZeroCrossType.Positive
         else:
             if last_zero_cross_type is not None and last_zero_cross_type == ZeroCrossType.Negative:
-                raise AssertionError("Consecutive negative zero crosses of the same type are not supported!")
-            zero_crosses.append(ZeroCross(type=ZeroCrossType.Negative, position=position_neg))
+                pass  # We're facing consecutive negative zero crosses. That's insane, isn't it? ;-)
+                # raise AssertionError("Consecutive negative zero crosses of the same type are not supported!")
+            else:
+                zero_crosses.append(ZeroCross(type=ZeroCrossType.Negative, position=position_neg))
             zero_crosses_neg = zero_crosses_neg[1:]
             last_zero_cross_type = ZeroCrossType.Negative
 
@@ -112,14 +117,15 @@ def cluster_1d(input_vector: np.ndarray, no_klass: int = 0, allowed_distance: in
         cluster__last_valid_position = position
 
     # Perhaps, there's yet another cluster in the very last position. Let's check
-    cluster_length = cluster__last_valid_position - cluster__start + 1
-    if cluster_length >= min_length:
-        clusters.append(IntRange(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
+    if cluster__last_valid_position is not None and cluster__start is not None:
+        cluster_length = cluster__last_valid_position - cluster__start + 1
+        if cluster_length >= min_length:
+            clusters.append(IntRange(start=cluster__start, end=cluster__last_valid_position, length=cluster_length))
     return clusters
 
 
 @numba.jit(nopython=True)
-def normalize_robust(input: np.ndarray) -> np.ndarray:
+def normalize_robust(input: np.ndarray, center: bool = True, scale: bool = True) -> np.ndarray:
     """
     Normalizes an input signal to:
     - median = 0
@@ -128,15 +134,21 @@ def normalize_robust(input: np.ndarray) -> np.ndarray:
     @note
     This way of normalizing is much more robust towards outliers than normalization using mean and std-dev.
     """
+    input = input.astype(np.float32)
     input_above_threshold = input[np.abs(input) >= 1e-10]  # That filter is necessary to be able to deal with "kaputt" data
     if len(input_above_threshold) == 0:
-        return input.astype(numpy.float32)
-    median = np.median(input_above_threshold)
-    quartiles = np.quantile(input_above_threshold, q=(0.75, 0.25))
-    inter_quartile_range = quartiles[0] - quartiles[1]
-    if inter_quartile_range <= 1e-4:  # Important to avoid division by zero & unrealistic upscaling due to "kaputt" data
-        inter_quartile_range = 1
-    return ((input-median)/inter_quartile_range).astype(numpy.float32)
+        return input
+    data = input
+    if center is True:
+        median = np.median(input_above_threshold)
+        data = (data - median).astype(np.float32)
+    if scale is True:
+        quartiles = np.quantile(input_above_threshold, q=(0.75, 0.25))
+        inter_quartile_range = quartiles[0] - quartiles[1]
+        if inter_quartile_range <= 1e-4:  # Important to avoid division by zero & unrealistic upscaling due to "kaputt" data
+            inter_quartile_range = 1
+        data = (data / inter_quartile_range).astype(np.float32)
+    return data
 
 
 def test_normalize_robust():
@@ -146,14 +158,14 @@ def test_normalize_robust():
     assert not np.isclose(inter_quartile_range(x), 1, atol=0.001)
     assert not np.isclose(np.median(x), 0, atol=0.001)
 
-    y = normalize_robust(x)
+    y = normalize_robust(x, center=True, scale=True)
     assert np.isclose(inter_quartile_range(y), 1, atol=0.001)
     assert np.isclose(np.median(y), 0, atol=0.001)
 
 
 def test_normalize_robust__equal_input_values():
     x = np.array([100] * 10)
-    y = normalize_robust(x)
+    y = normalize_robust(x, center=True, scale=True)
     assert not np.any(np.isnan(y))
     assert np.allclose(y, 0.0)
 
@@ -202,6 +214,11 @@ def test_cluster_1d__jit_speed():
     print()
     print(f"The whole process with n_runs={n_runs} took {overall_seconds*1000:.1f}ms")
     print(f"A single run took {overall_seconds/n_runs*1000:.2f}ms")
+
+
+def test_get_peaks():
+    peaks = get_peaks(waveform=np.array([-1, 0, 1, 2, 1, 0, 0, 0, 1, 2]), filter_kernel_width=2)
+    pass
 
 
 def test_get_peaks__qualitative():
