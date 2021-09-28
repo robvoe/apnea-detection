@@ -66,7 +66,7 @@ def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, b
         for sample_prediction, ai_dataset_index in zip(predictions, batch.sample_indexes):
             sub_dataset, sub_dataset_internal_index = ai_dataset._resolve_index(idx=ai_dataset_index)
             prediction_vectors[sub_dataset][sub_dataset_internal_index] = int(sample_prediction)
-    print("Finished obtaining model predictions. Start post-processing")
+    print("Finished obtaining model predictions, start post-processing now")
 
     for i in range(len(prediction_vectors)):
         dataset_name = ai_dataset._sliding_window_datasets[i].dataset_name
