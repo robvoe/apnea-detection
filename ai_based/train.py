@@ -31,7 +31,7 @@ del train_test_folders
 
 
 experiment_config = {
-    "name": f"cnn-4-gt_point-bs128-peakified_signals",
+    "name": f"cnn-5-gt_point-bs128-peakified_signals-low_wd-train_noise",
     "target_device": torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
     "init_weights_path": None,
     "checkpointing_enabled": True,
@@ -55,7 +55,7 @@ sliding_window_dataset_config = SlidingWindowDataset.Config(
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=train_folders,
-    noise_mean_std=None,
+    noise_mean_std=(0, 0.1),
 )
 test_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
@@ -90,7 +90,7 @@ print()
 print("Determine class occurrences of datasets..")
 class_occurrences_train = train_dataset.get_gt_class_occurrences()
 class_occurrences_test = test_dataset.get_gt_class_occurrences()
-class_weights = [1 / class_occurrences_train[klass] for klass in class_occurrences_train.keys()]
+class_weights = [1 / class_occurrences_train[klass] for klass in GroundTruthClass]
 class_weights = torch.FloatTensor(class_weights)
 print(f" - Training dataset:")
 pretty_print_dict(dict_=class_occurrences_train, indent_tabs=1, line_prefix="+ ")
@@ -119,8 +119,8 @@ base_hyperparameters = {
     "optimizer_args": {
         "betas": [0.9, 0.999],
         "eps": 1e-08,
-        "lr": 5e-2,  # 5e-4    It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
-        "weight_decay": 1e-3  # 5e-3
+        "lr": 1e-3,  # 5e-4    It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
+        "weight_decay": 1e-4  # 5e-3
     },
     "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
     "scheduler_requires_metric": True,
@@ -155,8 +155,7 @@ base_hyperparameters = {
         input_tensor_shape=features_shape,
         output_tensor_shape=(len(GroundTruthClass), *gt_shape),
         encoder_layer_configs=[
-            Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=5, stride=1, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=5, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
+            Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
 
             Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
             # Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
@@ -168,13 +167,14 @@ base_hyperparameters = {
             # Cnn1D.Config.EncoderLayerConfig(out_channels=512, kernel_size=3, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
         ],
         hidden_dense_layer_configs=[
-            MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.3, activation_fn=nn.LeakyReLU()),
+            MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
+            MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
+            MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
+            MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
         ],
         last_layer_dropout=0.3,
         last_layer_use_batchnorm=True
-    )
+    ),
     # "model": CompositionNet,
     # "model_config": CompositionNet.Config(
     #     input_tensor_shape=input_data_shape,

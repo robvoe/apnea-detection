@@ -20,13 +20,25 @@ from ai_based.utilities.evaluators import BaseEvaluator
 _N_CPU_CORES = len(os.sched_getaffinity(0))
 _N_WORKERS = max(1, _N_CPU_CORES-1)
 
-MIN_CLUSTER_LENGTH_SECONDS = 10  # Minimum length of a cluster, to be taken it into account
-MAX_CLUSTER_DISTANCE_SECONDS = 2  # Maximum distance between two clusters to be assumed the same
-
 
 def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, batch_size: int = 512, progress_fn=None,
                                 device: torch.device = None, min_cluster_length_s: float = 10,
-                                max_cluster_distance_s: float = 2) -> Dict[int, List[RespiratoryEvent]]:
+                                max_cluster_distance_s: float = 3) -> Dict[str, List[RespiratoryEvent]]:
+    """
+    Performs inference on a given model and a given AiDataset. The latter may consist of a number of enclosed
+    SlidingWindowDatasets.
+
+    @param model: Model that we wish to use
+    @param ai_dataset: Data that we wish to conduct our examinations with
+    @param batch_size: Batch size that we use when pushing data through the NN. Has no influence on predictions quality.
+    @param progress_fn: Function that may print prediction progress, e.g. tqdm. If None, no progress will be shown.
+    @param device: PyTorch device that we wish to perform the predictions on. If None, a good fit will be chosen.
+    @param min_cluster_length_s: Affects later-stage prediction clustering. Minimum length of an event cluster to be
+                                 detected as respiratory event.
+    @param max_cluster_distance_s: Affects later-stage prediction clustering. Maximum distance between two event
+                                   clusters to be assumed the same.
+    @return:
+    """
     # Generate some default values
     if progress_fn is None:
         def progress_fn(x): return x
@@ -45,7 +57,7 @@ def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, b
     # Iterate over the dataset & construct the SlidingWindowDatasetIndex-based output vectors
     print(f"Start obtaining model predictions on {len(ai_dataset._sliding_window_datasets)} sub-datasets")
     model.to(device)
-    data_loader = torch.utils.data.DataLoader(ai_dataset, batch_size=512, shuffle=False, collate_fn=TrainingBatch.from_iterable, num_workers=_N_WORKERS)
+    data_loader = torch.utils.data.DataLoader(ai_dataset, batch_size=batch_size, shuffle=False, collate_fn=TrainingBatch.from_iterable, num_workers=_N_WORKERS)
     for batch in progress_fn(data_loader):
         batch.to_device(device)
         net_input = torch.autograd.Variable(batch.input_data)
@@ -68,8 +80,8 @@ def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, b
     max_cluster_distance = int(max_cluster_distance_s * conversion_factor)
     del conversion_factor
 
-    respiratory_event_lists: Dict[int, List[RespiratoryEvent]] = {}
-    for i in range(len(ai_dataset._sliding_window_datasets)):
+    respiratory_event_lists: Dict[str, List[RespiratoryEvent]] = {}
+    for i, sliding_window_dataset in enumerate(ai_dataset._sliding_window_datasets):
         # Perform the clustering
         sub_dataset_prediction_vector = prediction_vectors[i]
         event_clusters: Dict[RespiratoryEventType, List[IntRange]] = {}
@@ -80,7 +92,6 @@ def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, b
             clusters = cluster_1d(input_vector=isolated_class_vector, no_klass=-1, allowed_distance=max_cluster_distance, min_length=min_cluster_length)
             event_clusters[event_type] = clusters
         # Translate SlidingWindowDataset-sample-index-based clusters to time-based events
-        sliding_window_dataset = ai_dataset._sliding_window_datasets[i]
         respiratory_events: List[RespiratoryEvent] = []
         for event_type in RespiratoryEventType:
             for event_cluster in event_clusters[event_type]:
@@ -88,7 +99,7 @@ def retrieve_respiratory_events(model: torch.nn.Module, ai_dataset: AiDataset, b
                 end = sliding_window_dataset[event_cluster.end].ground_truth.index[-1]
                 respiratory_events += [RespiratoryEvent(start=start, aux_note=None, end=end, event_type=event_type)]
         respiratory_events = sorted(respiratory_events, key=lambda ev: ev.start)
-        respiratory_event_lists[i] = respiratory_events
+        respiratory_event_lists[sliding_window_dataset.dataset_name] = respiratory_events
 
     print("Finished post-processing")
     return respiratory_event_lists

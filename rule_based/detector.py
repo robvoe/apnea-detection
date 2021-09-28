@@ -1,5 +1,8 @@
 from typing import List, Tuple, Optional
 from enum import Enum
+import os
+import multiprocessing as mp
+import functools
 
 import pandas as pd
 import numpy as np
@@ -236,6 +239,54 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
     return apnea_events
 
 
+def _mp_exec_fn(signal_awake: Tuple[pd.DataFrame, Optional[pd.Series]], sample_frequency_hz: float):
+    """Just an internal helper function. Wraps multicore access."""
+    return detect_respiratory_events(signals=signal_awake[0], sample_frequency_hz=sample_frequency_hz, awake_series=signal_awake[1])
+
+
+def detect_respiratory_events_multicore(signals: List[pd.DataFrame], sample_frequency_hz: float,
+                                        awake_series: List[Optional[pd.Series]] = None, progress_fn=None,
+                                        n_processes: int = None) -> List[List[RespiratoryEvent]]:
+    """
+    Essentially the same as the function detect_respiratory_events, just that its heavy calculations will be performed
+    on multiple CPU cores.
+
+    @param signals: List of signals dataframes, each standing for one dataset. Necessary columns are "AIRFLOW", "ABD",
+                    "CHEST", "SaO2".
+    @param sample_frequency_hz: Sample frequency of given signals.
+    @param awake_series: If a valid series is passed here, all detected respiratory events during wake stages (value==1)
+                         will be discarded. If None is passed, no wake stages will be taken into account. If a list is
+                         passed, its length must match the length of signals list. Single list elements may be None.
+    @param progress_fn: Function that may print prediction progress, e.g. tqdm. If None, no progress will be shown.
+    @param n_processes: Number of processes we wish spread the work to. If None, an optimum will be chosen.
+
+    @return: A list of the same length as the signals list.
+    """
+    # At first, make sure everything's in place
+    assert len(signals) > 0, "Empty signals list was passed"
+
+    # Find a few default values
+    if awake_series is None:
+        awake_series = [None] * len(signals)
+    assert len(signals) == len(awake_series), \
+        f"Length of passed 'awake_series' list ({len(awake_series)}) differs from 'signals' list ({len(signals)})"
+
+    affinity = len(os.sched_getaffinity(0))
+    if n_processes is None:
+        n_processes = max(1, affinity - 2)
+    assert 1 <= n_processes <= affinity, f"Given 'n_processes' not in the allowed range of 1..{affinity}"
+
+    if progress_fn is None:
+        def progress_fn(x): return x
+
+    # Let's get started
+    with mp.Pool(processes=n_processes) as pool:
+        load_fn_ = functools.partial(_mp_exec_fn, sample_frequency_hz=sample_frequency_hz)
+        loading_results = list(progress_fn(pool.imap(load_fn_, zip(signals, awake_series))))
+        results: List[List[RespiratoryEvent]] = loading_results
+    return results
+
+
 def test_development():
     from util.datasets import SlidingWindowDataset
     from util.paths import DATA_PATH
@@ -247,4 +298,18 @@ def test_development():
     sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH / "training" / "tr03-0005", allow_caching=True)
 
     events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
+    pass
+
+
+def test_development__multiprocessing():
+    from util.datasets import SlidingWindowDataset
+    from util.paths import DATA_PATH
+
+    config = SlidingWindowDataset.Config(
+        downsample_frequency_hz=5,
+        time_window_size=pd.Timedelta("2 minutes"),
+    )
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH / "training" / "tr03-0005", allow_caching=True)
+
+    events_lists = detect_respiratory_events_multicore(signals=[sliding_window_dataset.signals], sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
     pass

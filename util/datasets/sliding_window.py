@@ -1,6 +1,6 @@
 import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional, Tuple, List, NamedTuple, Union, Iterable, Dict
 from pathlib import Path
 import pickle
@@ -205,7 +205,9 @@ class SlidingWindowDataset:
         try:
             with open(file=cached_dataset_file, mode="rb") as file:
                 cached_dataset: SlidingWindowDataset = pickle.load(file)
-            assert self.config == cached_dataset.config
+            # Make sure the cached config matches the given config. We intentionally don't compare the configs directly!
+            for field in fields(self.config):
+                assert getattr(self.config, field.name) == getattr(cached_dataset.config, field.name)
             # Now, retrieve the cached data fields
             self._valid_center_points = cached_dataset._valid_center_points
             self._idx__signal_int_index = cached_dataset._idx__signal_int_index
