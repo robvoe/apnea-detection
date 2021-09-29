@@ -180,14 +180,16 @@ class Experiment:
         model = hyperparams["model"](model_config)
         model.to(self.config["experiment"]["target_device"])
 
-        # Load model weights
-        assert not (self.config["experiment"]["init_weights_path"] is not None and self.config["experiment"]["checkpointing_enabled"] is True), \
-            "Inconsistent parametrization. Choose only one of both 'init_weights_path' or 'checkpointing_enabled'!"
+        # --> I decided that we don't need that restriction below..!
+        # assert not (self.config["experiment"]["init_weights_path"] is not None and self.config["experiment"]["checkpointing_enabled"] is True), \
+        #     "Inconsistent parametrization. Choose only one of both 'init_weights_path' or 'checkpointing_enabled'!"
 
+        # Load model weights
         if self.config["experiment"]["init_weights_path"] is not None:
-            weights = torch.load(self.config["experiment"]["init_weights_path"],
-                                 map_location=self.config["experiment"]["target_device"])
+            file_path: Path = self.config["experiment"]["init_weights_path"]
+            weights = torch.load(file_path, map_location=self.config["experiment"]["target_device"])
             model.load_state_dict(weights)
+            print(f"-> Successfully loaded weights from init_weights_path '{file_path.name}'")
         elif self.config["experiment"]["checkpointing_enabled"] is True and checkpoint_lookup_dir is not None:
             assert checkpoint_lookup_dir.exists() and checkpoint_lookup_dir.is_dir()
             checkpoint_file = checkpoint_lookup_dir / CHECKPOINT_FILENAME
