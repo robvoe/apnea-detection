@@ -145,13 +145,13 @@ class Experiment:
         Experiment._final_output(experiment_started_at, combinations_of_configs, experiment_dir)
 
     @staticmethod
-    def _final_output(experiment_started_at: datetime, combinations_of_configs, experiment_dir: str):
+    def _final_output(experiment_started_at: datetime, combinations_of_configs, experiment_dir: Path):
         """Outputs some final information to the screen and the file 'total_duration.txt'"""
         duration = datetime.now() - experiment_started_at
         duration_str = f"{duration.days}d, {duration.seconds // 3600}h:{(duration.seconds // 60) % 60}min"
         print(f"In total, all {len(combinations_of_configs)} trainings took {duration_str}.")
 
-        with open(os.path.join(experiment_dir, "total_duration.txt"), mode="w") as file:
+        with open(experiment_dir / "total_duration.txt", mode="w") as file:
             file.write("\n".join([
                 f"Total duration of experiment: {duration_str}",
                 f"Total seconds of experiment: {int(duration.total_seconds())}",

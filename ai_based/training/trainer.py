@@ -109,7 +109,7 @@ class Trainer:
             accumulated_training_loss = 0.0
             training_session.schedule_learning_rate()
             desc = f"Epoch {epoch_index+1}/{self.config['num_epochs']}"
-            evaluator_test = None
+            evaluator_test: Optional[BaseEvaluator] = None
             for i, training_batch in tqdm(enumerate(self.data_loader_training), desc=desc, total=len(self.data_loader_training), file=sys.stdout, position=0):
                 batch_training_loss, batch_training_output = training_session.train_batch(training_batch)
                 assert not torch.isnan(batch_training_loss)
@@ -167,8 +167,6 @@ class Trainer:
             torch.save(log_dict, save_dir / "log.pt")
             torch.save(final_evaluator_test.get_scores_dict(), save_dir / "eval.pt")
             torch.save(best_weights, save_dir / "weights.pt")
-
-        return log_dict, final_evaluator_test.get_scores_dict(), best_weights
 
     def _calculate_logging_iterations(self):
         max_idx = len(self.data_loader_training) - 1
