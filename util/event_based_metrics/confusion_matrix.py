@@ -75,7 +75,7 @@ class _ConfusionMatrixBase(ABC):
         ax.yaxis.set_label_position("right")
         if title is not None:
             plt.title(title, pad=25, fontdict={'fontsize': 14, 'fontweight': 'medium'})
-        plt.show()
+        # plt.show()
 
     def get_class_based_scores(self) -> Dict[RespiratoryEventType, Scores]:
         class_based_scores: Dict[RespiratoryEventType, Scores] = {}
@@ -142,9 +142,9 @@ class OverlapsBasedConfusionMatrix(_ConfusionMatrixBase):
         return False
 
 
-class PreciseConfusionMatrix(_ConfusionMatrixBase):
+class SampleBasedConfusionMatrix(_ConfusionMatrixBase):
     """
-    Provides a precise confusion matrix of respiratory event classes, by evaluating the given
+    Provides a sample-based confusion matrix of respiratory event classes, by evaluating the given
     events in a "pixel-based" manner.
 
     This behaviour differs from the implementation above, because here we don't count overlaps.
@@ -181,15 +181,72 @@ class PreciseConfusionMatrix(_ConfusionMatrixBase):
             annotation_vector = self._build_event_vector(time_index=time_index, events=annotated_events)
             detection_vector = self._build_event_vector(time_index=time_index, events=detected_events)
             matrix = self._generate_confusion_matrix(annotation_vector=annotation_vector, detection_vector=detection_vector)
-        super(PreciseConfusionMatrix, self).__init__(confusion_matrix=matrix)
+        super(SampleBasedConfusionMatrix, self).__init__(confusion_matrix=matrix)
 
     @classmethod
-    def empty(cls) -> "PreciseConfusionMatrix":
+    def empty(cls) -> "SampleBasedConfusionMatrix":
         return cls(None, None, None)  # noqa
 
     @staticmethod
     def _allow_plot_no_event_no_event() -> bool:
         return True
+
+    def get_accuracy(self) -> float:
+        """Returns the Accuracy as a result of the 5-class-based classification performance."""
+        n_correct_predictions = 0
+        for klass_idx in range(N_CLASSES):
+            n_correct_predictions += self._matrix[klass_idx, klass_idx]
+        accuracy = float(n_correct_predictions / np.sum(self._matrix))
+        assert 0.0 <= accuracy <= 1.0
+        return accuracy
+
+    def get_cohen_kappa(self) -> float:
+        """Returns the Cohen's Kappa as a result of the 5-class-based classification performance."""
+        # Link to the explanation that was used to implement the score:  https://stats.stackexchange.com/a/82187
+        observed_accuracy = self.get_accuracy()
+        class_based_expected_accuracy = [np.sum(self._matrix[klass, :])*np.sum(self._matrix[:, klass])/np.sum(self._matrix) for klass in range(N_CLASSES)]
+        expected_accuracy = np.sum(class_based_expected_accuracy) / np.sum(self._matrix)
+
+        kappa = float((observed_accuracy-expected_accuracy) / (1-expected_accuracy))
+        assert 0.0 <= kappa <= 1.0
+        return kappa
+
+    @property
+    def _binary_matrix(self) -> np.ndarray:
+        """
+        Provides the binary class matrix (Event vs NoEvent) as result of the reduction of the original 5-class-matrix.
+
+        - FIRST DIM: true labels,  SECOND DIM: predicted labels
+        - Index 0: Event,   Index 1: NoEvent
+        """
+        binary_matrix = np.zeros(shape=(2, 2))
+        binary_matrix[0, 0] = np.sum(self._matrix[:NO_EVENT_INDEX, :NO_EVENT_INDEX])
+        binary_matrix[1, 0] = np.sum(self._matrix[NO_EVENT_INDEX, :NO_EVENT_INDEX])
+        binary_matrix[0, 1] = np.sum(self._matrix[:NO_EVENT_INDEX, NO_EVENT_INDEX])
+        binary_matrix[1, 1] = self._matrix[NO_EVENT_INDEX, NO_EVENT_INDEX]
+        return binary_matrix
+
+    def get_binary_accuracy(self) -> float:
+        """Returns the Accuracy as a result of the binary (Event vs NoEvent) classification performance."""
+        binary_matrix = self._binary_matrix
+        n_correct_predictions = 0
+        for klass_idx in range(binary_matrix.shape[0]):
+            n_correct_predictions += binary_matrix[klass_idx, klass_idx]
+        accuracy = float(n_correct_predictions / np.sum(binary_matrix))
+        assert 0.0 <= accuracy <= 1.0
+        return accuracy
+
+    def get_binary_cohen_kappa(self) -> float:
+        """Returns the Cohen's Kappa as a result of the binary (Event vs NoEvent) classification performance."""
+        # Link to the explanation that was used to implement the score:  https://stats.stackexchange.com/a/82187
+        binary_matrix = self._binary_matrix
+        observed_accuracy = self.get_binary_accuracy()
+        class_based_expected_accuracy = [np.sum(binary_matrix[klass, :])*np.sum(binary_matrix[:, klass])/np.sum(binary_matrix) for klass in range(binary_matrix.shape[0])]
+        expected_accuracy = np.sum(class_based_expected_accuracy) / np.sum(binary_matrix)
+
+        kappa = float((observed_accuracy-expected_accuracy) / (1-expected_accuracy))
+        assert 0.0 <= kappa <= 1.0
+        return kappa
 
 
 @pytest.fixture
@@ -206,7 +263,7 @@ def events_provider():
     return annotated_events, detected_events
 
 
-def test_confusion_matrix_generation(events_provider):
+def test_overlap_based_confusion_matrix_generation(events_provider):
     annotated_events, detected_events = events_provider
 
     confusion_matrix = OverlapsBasedConfusionMatrix(annotated_events=annotated_events, detected_events=detected_events)
@@ -215,7 +272,7 @@ def test_confusion_matrix_generation(events_provider):
     assert confusion_matrix[N_CLASSES-1, RespiratoryEventType.CentralApnea.value] == 1
 
 
-def test_confusion_matrix_plot(events_provider):
+def test_overlap_based_confusion_matrix_plot(events_provider):
     annotated_events, detected_events = events_provider
 
     confusion_matrix = OverlapsBasedConfusionMatrix(annotated_events=annotated_events, detected_events=detected_events)
@@ -224,21 +281,46 @@ def test_confusion_matrix_plot(events_provider):
     confusion_matrix.plot()
 
 
-def test_precise_confusion_matrix_generation(events_provider):
+def test_sample_based_confusion_matrix_generation(events_provider):
     annotated_events, detected_events = events_provider
 
     index = pd.timedelta_range(start=pd.to_timedelta("0 min"), end=pd.to_timedelta("10 min"), freq=pd.to_timedelta("1 min"))
-    confusion_matrix = PreciseConfusionMatrix(time_index=index, annotated_events=annotated_events, detected_events=detected_events)
+    confusion_matrix = SampleBasedConfusionMatrix(time_index=index, annotated_events=annotated_events, detected_events=detected_events)
     assert confusion_matrix._matrix.shape == (N_CLASSES, N_CLASSES)
     assert confusion_matrix[RespiratoryEventType.Hypopnea.value, RespiratoryEventType.Hypopnea.value] == 2
     assert confusion_matrix[NO_EVENT_INDEX, RespiratoryEventType.CentralApnea.value] == 2
+    accuracy = confusion_matrix.get_accuracy()
+    cohen_kappa = confusion_matrix.get_cohen_kappa()
+
+    binary_matrix = confusion_matrix._binary_matrix
+    assert np.sum(binary_matrix) == np.sum(confusion_matrix._matrix)
+
+    binary_accuracy = confusion_matrix.get_binary_accuracy()
+    binary_cohen_kappa = confusion_matrix.get_binary_cohen_kappa()
+    pass
 
 
-def test_precise_confusion_matrix_plot(events_provider):
+def test_sample_based_confusion_matrix_plot(events_provider):
     annotated_events, detected_events = events_provider
 
     index = pd.timedelta_range(start=pd.to_timedelta("0 min"), end=pd.to_timedelta("10 min"), freq=pd.to_timedelta("1 min"))
-    confusion_matrix = PreciseConfusionMatrix(time_index=index, annotated_events=annotated_events, detected_events=detected_events)
+    confusion_matrix = SampleBasedConfusionMatrix(time_index=index, annotated_events=annotated_events, detected_events=detected_events)
     class_based_scores = confusion_matrix.get_class_based_scores()
     macro_scores = confusion_matrix.get_macro_scores()
     confusion_matrix.plot()
+
+
+def test_cohen_kappa():
+    """
+    This test validates the Cohen Kappa calculation using a "minimal example". It
+    comes from   https://stats.stackexchange.com/a/82187
+    """
+    # The following lines manipulate a few values to make our minimal example work
+    global N_CLASSES
+    N_CLASSES = 2
+    confusion_matrix = SampleBasedConfusionMatrix.empty()
+    confusion_matrix._matrix = np.array([[10, 5],
+                                         [7, 8]])
+    # Let's do the actual testing
+    kappa = confusion_matrix.get_cohen_kappa()
+    assert np.isclose(kappa, 0.2, rtol=1e-5)

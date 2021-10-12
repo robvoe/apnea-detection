@@ -48,8 +48,14 @@ def get_peaks(waveform: np.ndarray, filter_kernel_width: int) -> List[Peak]:
 
     zero_crosses_pos: np.ndarray = np.where(np.diff(np.sign(filtered_waveform)) > 1)[0]
     zero_crosses_neg: np.ndarray = np.where(np.diff(np.sign(filtered_waveform)) < -1)[0]
-    if np.abs(len(zero_crosses_pos)-len(zero_crosses_neg)) > 1:
-        raise AssertionError("There's a discrepancy in numbers of detected pos/neg zero crosses. Needs some rework!")
+    n_zero_cross_difference = np.abs(len(zero_crosses_pos)-len(zero_crosses_neg))
+    if n_zero_cross_difference > 4:
+        raise AssertionError("Discrepancy in numbers of detected pos/neg zero crosses is too large. Needs some rework!")
+    elif n_zero_cross_difference > 1:
+        # As long as difference in zero-cross-number is small, we simply clamp the longer list
+        n_zero_crosses = min(len(zero_crosses_pos), len(zero_crosses_neg))
+        zero_crosses_pos = zero_crosses_pos[:n_zero_crosses]
+        zero_crosses_neg = zero_crosses_neg[:n_zero_crosses]
 
     peaks: List[Peak] = []
     if len(zero_crosses_pos) == 0 or len(zero_crosses_neg) == 0:

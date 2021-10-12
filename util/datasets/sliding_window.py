@@ -293,3 +293,23 @@ def test_sliding_window_dataset():
     window_data_ = sliding_window_dataset.get(center_point=valid_center_points[0])
     window_data_ = sliding_window_dataset.get(center_point=pd.Timedelta("0 days 00:15:15.930000"))
     pass
+
+
+def test_caching_speed():
+    from util.paths import DATA_PATH
+    from datetime import datetime
+
+    config = SlidingWindowDataset.Config(
+        downsample_frequency_hz=5,
+        time_window_size=pd.Timedelta("2 minutes")
+    )
+
+    n_runs = 5
+    started_at = datetime.now()
+    for n in range(n_runs):
+        _ = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH / "training" / "tr03-0005", allow_caching=False)
+    overall_seconds = (datetime.now() - started_at).total_seconds()
+
+    print()
+    print(f"The whole process with n_runs={n_runs} took {overall_seconds * 1000:.1f}ms")
+    print(f"A single run took {overall_seconds / n_runs * 1000:.2f}ms")

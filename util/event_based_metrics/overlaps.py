@@ -18,10 +18,10 @@ def get_overlaps(annotated_events: List[RespiratoryEvent], detected_events: List
 
 def get_n_detected_annotations(annotated_events: List[RespiratoryEvent], detected_events: List[RespiratoryEvent]) -> int:
     """Returns how many annotated events were recognized"""
-    n_overlaps = 0
+    n_detected_annotations = 0
     for a_ in annotated_events:
         for d_ in detected_events:
             if a_.overlaps(d_):
-                n_overlaps += 1
+                n_detected_annotations += 1
                 break
-    return n_overlaps
+    return n_detected_annotations

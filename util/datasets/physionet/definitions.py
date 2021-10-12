@@ -46,6 +46,13 @@ class SleepStageEvent(TransientEvent):
 class EnduringEvent(_Event):
     end: pd.Timedelta
 
+    @property
+    def length_seconds(self):
+        return (self.end - self.start).total_seconds()
+
+    def __len__(self):
+        return self.length_seconds
+
     def overlaps(self, other: "EnduringEvent") -> bool:
         """Returns if two EnduringEvent instances temporally overlap."""
         if self.start <= other.start <= self.end:

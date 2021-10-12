@@ -21,9 +21,10 @@ class _CoarseRespiratoryEventType(Enum):
 
 
 @numba.jit(nopython=True)
-def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz: float) -> Tuple[List[IntRange], List[_CoarseRespiratoryEventType]]:
-    """Takes a look at the AIRFLOW signal and determines areas of (hypo) apneas."""
-    min_event_length = 10*sample_frequency_hz
+def _detect_airflow_resp_events(airflow_vector: np.ndarray, sample_frequency_hz: float,
+                                min_event_length_seconds: float = 10) -> Tuple[List[IntRange], List[_CoarseRespiratoryEventType]]:
+    """Takes a look at the AIRFLOW signal and determines areas of apneas/hypopneas."""
+    min_event_length = min_event_length_seconds * sample_frequency_hz
     max_event_length = 100*sample_frequency_hz
     moving_baseline_window_lr = 200  # specifies each direction (left/right) from current peak_index position
     filter_kernel_width = int(sample_frequency_hz*0.7)
@@ -185,7 +186,8 @@ def _classify_apnea(apnea_time_range: IntRange, abd_peaks: List[Peak], chest_pea
     return RespiratoryEventType.ObstructiveApnea
 
 
-def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, awake_series: pd.Series = None) -> List[RespiratoryEvent]:
+def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float, awake_series: pd.Series = None,
+                              discard_invalid_hypopneas: bool = True, min_event_length_seconds: float = 10) -> List[RespiratoryEvent]:
     """
     Detects respiratory events within a bunch of given signals.
 
@@ -193,13 +195,15 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
     @param sample_frequency_hz: Sample frequency of given signals.
     @param awake_series: If a valid series is passed here, all detected respiratory events during wake stages (value==1)
                          will be discarded. If None is passed, no wake stages will be taken into account.
+    @param discard_invalid_hypopneas: Denotes if potential hypopneas shall be discarded if SaO2 does not drop by >=3% accordingly.
+    @param min_event_length_seconds: Defines the minimum seconds length of detected apneas/hypopneas. Shorter events will be discarded. Default value (as per AASM manual) is 10 seconds.
     @return: List of detected respiratory events.
     """
     assert all([col in signals for col in _NECESSARY_COLUMNS]), \
         f"At least one of the necessary columns ({_NECESSARY_COLUMNS}) is missing in the passed DataFrame"
     if awake_series is not None:
         assert awake_series.index == signals.index, "Indexes of both 'signals' and 'is_awake' must be equal!"
-    ranges, coarse_respiratory_event_types = _detect_airflow_resp_events(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz)
+    ranges, coarse_respiratory_event_types = _detect_airflow_resp_events(airflow_vector=signals["AIRFLOW"].values, sample_frequency_hz=sample_frequency_hz, min_event_length_seconds=min_event_length_seconds)
     chest_peaks = get_peaks(waveform=signals["CHEST"].values, filter_kernel_width=int(sample_frequency_hz*0.7))
     abd_peaks = get_peaks(waveform=signals["ABD"].values, filter_kernel_width=int(sample_frequency_hz * 0.7))
 
@@ -218,7 +222,7 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
         end = signals.index[range.end]
 
         # If Hypopnea was detected, make sure SaO2 value falls accordingly by >= 3%
-        if coarse_type == _CoarseRespiratoryEventType.Hypopnea:
+        if discard_invalid_hypopneas is True and coarse_type == _CoarseRespiratoryEventType.Hypopnea:
             max_pre_event_sa_o2 = signals["SaO2"][start-pd.to_timedelta("30s"):start].max()
             min_post_event_sa_o2 = signals["SaO2"][start:end+pd.to_timedelta("60s")].min()
             if not min_post_event_sa_o2 <= max_pre_event_sa_o2*0.97:
@@ -235,18 +239,28 @@ def detect_respiratory_events(signals: pd.DataFrame, sample_frequency_hz: float,
 
     if awake_series:
         print(f"Discarded {n_discarded_wake_stages} detected respiratory events, as they overlap with wake stages")
-    print(f"Discarded {n_filtered_hypopneas} hypopneas, due to SaO2 not falling by 3%")
+    if discard_invalid_hypopneas is True:
+        print(f"Discarded {n_filtered_hypopneas} hypopneas, due to SaO2 not falling by 3%")
     return apnea_events
 
 
-def _mp_exec_fn(signal_awake: Tuple[pd.DataFrame, Optional[pd.Series]], sample_frequency_hz: float):
+def _mp_exec_fn(index: int, signals_list: List[pd.DataFrame], awake_series_list: List[Optional[pd.Series]], sample_frequency_hz: float, discard_invalid_hypopneas: bool, min_event_length_seconds: float):
     """Just an internal helper function. Wraps multicore access."""
-    return detect_respiratory_events(signals=signal_awake[0], sample_frequency_hz=sample_frequency_hz, awake_series=signal_awake[1])
+    try:
+        return detect_respiratory_events(signals=signals_list[index], sample_frequency_hz=sample_frequency_hz,
+                                         awake_series=awake_series_list[index],
+                                         discard_invalid_hypopneas=discard_invalid_hypopneas,
+                                         min_event_length_seconds=min_event_length_seconds)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:
+        raise RuntimeError(f"Error occurred in element index {index}") from e
 
 
 def detect_respiratory_events_multicore(signals: List[pd.DataFrame], sample_frequency_hz: float,
-                                        awake_series: List[Optional[pd.Series]] = None, progress_fn=None,
-                                        n_processes: int = None) -> List[List[RespiratoryEvent]]:
+                                        awake_series: List[Optional[pd.Series]] = None,
+                                        discard_invalid_hypopneas = True, min_event_length_seconds: float = 10,
+                                        progress_fn=None, n_processes: int = None) -> List[List[RespiratoryEvent]]:
     """
     Essentially the same as the function detect_respiratory_events, just that its heavy calculations will be performed
     on multiple CPU cores.
@@ -257,6 +271,8 @@ def detect_respiratory_events_multicore(signals: List[pd.DataFrame], sample_freq
     @param awake_series: If a valid series is passed here, all detected respiratory events during wake stages (value==1)
                          will be discarded. If None is passed, no wake stages will be taken into account. If a list is
                          passed, its length must match the length of signals list. Single list elements may be None.
+    @param discard_invalid_hypopneas: Denotes if potential hypopneas shall be discarded if SaO2 does not drop by >=3% accordingly.
+    @param min_event_length_seconds: Defines the minimum seconds length of detected apneas/hypopneas. Shorter events will be discarded. Default value (as per AASM manual) is 10 seconds.
     @param progress_fn: Function that may print prediction progress, e.g. tqdm. If None, no progress will be shown.
     @param n_processes: Number of processes we wish spread the work to. If None, an optimum will be chosen.
 
@@ -273,16 +289,19 @@ def detect_respiratory_events_multicore(signals: List[pd.DataFrame], sample_freq
 
     affinity = len(os.sched_getaffinity(0))
     if n_processes is None:
-        n_processes = max(1, affinity - 2)
+        n_processes = max(1, affinity - 1)
     assert 1 <= n_processes <= affinity, f"Given 'n_processes' not in the allowed range of 1..{affinity}"
 
     if progress_fn is None:
         def progress_fn(x): return x
 
+    # Perform a single detection run, to pre-JIT all necessary functions
+    detect_respiratory_events(signals[0], sample_frequency_hz=sample_frequency_hz, awake_series=None, discard_invalid_hypopneas=False)
+
     # Let's get started
     with mp.Pool(processes=n_processes) as pool:
-        load_fn_ = functools.partial(_mp_exec_fn, sample_frequency_hz=sample_frequency_hz)
-        loading_results = list(progress_fn(pool.imap(load_fn_, zip(signals, awake_series))))
+        load_fn_ = functools.partial(_mp_exec_fn, signals_list=signals, awake_series_list=awake_series, sample_frequency_hz=sample_frequency_hz, discard_invalid_hypopneas=discard_invalid_hypopneas, min_event_length_seconds=min_event_length_seconds)
+        loading_results = list(progress_fn(pool.imap(load_fn_, range(len(signals)))))
         results: List[List[RespiratoryEvent]] = loading_results
     return results
 
@@ -299,6 +318,32 @@ def test_development():
 
     events = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
     pass
+
+
+def test_jit_speed():
+    from util.datasets import SlidingWindowDataset
+    from util.paths import DATA_PATH
+    from datetime import datetime
+
+    config = SlidingWindowDataset.Config(
+        downsample_frequency_hz=5,
+        time_window_size=pd.Timedelta("2 minutes")
+    )
+    sliding_window_dataset = SlidingWindowDataset(config=config, dataset_folder=DATA_PATH / "training" / "tr03-0005", allow_caching=True)
+
+    # Call everything once to pre-JIT our dependencies
+    detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
+
+    # Let's go!
+    n_runs = 5
+    started_at = datetime.now()
+    for n in range(n_runs):
+        result = detect_respiratory_events(signals=sliding_window_dataset.signals, sample_frequency_hz=config.downsample_frequency_hz, awake_series=None)
+    overall_seconds = (datetime.now() - started_at).total_seconds()
+
+    print()
+    print(f"The whole process with n_runs={n_runs} took {overall_seconds * 1000:.1f}ms")
+    print(f"A single run took {overall_seconds / n_runs * 1000:.2f}ms")
 
 
 def test_development__multiprocessing():

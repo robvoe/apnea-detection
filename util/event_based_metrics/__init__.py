@@ -4,4 +4,4 @@ __license__ = "MIT"
 
 
 from .overlaps import get_overlaps, get_n_detected_annotations
-from .confusion_matrix import OverlapsBasedConfusionMatrix, PreciseConfusionMatrix
+from .confusion_matrix import OverlapsBasedConfusionMatrix, SampleBasedConfusionMatrix
