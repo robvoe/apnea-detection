@@ -207,7 +207,9 @@ class SampleBasedConfusionMatrix(_ConfusionMatrixBase):
         class_based_expected_accuracy = [np.sum(self._matrix[klass, :])*np.sum(self._matrix[:, klass])/np.sum(self._matrix) for klass in range(N_CLASSES)]
         expected_accuracy = np.sum(class_based_expected_accuracy) / np.sum(self._matrix)
 
-        kappa = float((observed_accuracy-expected_accuracy) / (1-expected_accuracy))
+        kappa = float((observed_accuracy-expected_accuracy) / (1-expected_accuracy)) if expected_accuracy<1.0 else 1.0
+        kappa = min(1.0, kappa)
+        kappa = max(0.0, kappa)
         assert 0.0 <= kappa <= 1.0
         return kappa
 
@@ -245,7 +247,7 @@ class SampleBasedConfusionMatrix(_ConfusionMatrixBase):
         expected_accuracy = np.sum(class_based_expected_accuracy) / np.sum(binary_matrix)
 
         kappa = float((observed_accuracy-expected_accuracy) / (1-expected_accuracy))
-        assert 0.0 <= kappa <= 1.0
+        assert 0.0 <= kappa <= 1.0, f"Kappa has an illegal value of {kappa}"
         return kappa
 
 

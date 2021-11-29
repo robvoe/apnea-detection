@@ -15,27 +15,26 @@ from ai_based.utilities.print_helpers import pretty_print_dict
 from ai_based.networks import MLP, Cnn1D
 from ai_based.training.experiment import Experiment
 from util.datasets import SlidingWindowDataset, GroundTruthClass
-from util.paths import DATA_PATH, TRAIN_TEST_SPLIT_YAML
+from util.paths import DATA_PATH, TRAIN_TEST_SPLIT_YAML, RESULTS_PATH_AI
 from util.train_test_split import read_train_test_split_yaml, _split_subfolder_list
 
 
 np.seterr(all='raise')
 
 
-data_folder = Path("~/Physionet2018/physionet.org/files/challenge-2018/1.0.0/training")
+data_folder = DATA_PATH / "training"
 train_test_folders = read_train_test_split_yaml(input_yaml=TRAIN_TEST_SPLIT_YAML, prefix_base_folder=data_folder)
 train_folders, test_folders = train_test_folders.train, train_test_folders.test
 del train_test_folders
 
-# train_folders, test_folders = _split_subfolder_list(folder=DATA_PATH/"training", split_ratio=0.8, shuffle=False)
-
 
 experiment_config = {
-    "name": f"cnn-5-gt_point-bs128-peakified_signals-low_wd-train_noise",
+    "name": f"test_experiment",
     "target_device": torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
+    # If both 'init_weights_path' is given & there is a checkpoint w/ checkpointing enabled,  'init_weights_path' wins!
     "init_weights_path": None,
     "checkpointing_enabled": True,
-    "checkpointing_cyclic_epoch": 10,  # May be None. If set, we automatically take a checkpoint every N epochs.
+    "checkpointing_cyclic_epoch": None,  # May be None. If set, we automatically take a checkpoint every N epochs.
     "n_repetitions": 1,
     "deterministic_mode": False,
     "train_dataset_folders": train_folders,
@@ -55,7 +54,7 @@ sliding_window_dataset_config = SlidingWindowDataset.Config(
 training_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
     dataset_folders=train_folders,
-    noise_mean_std=(0, 0.1),
+    noise_mean_std=(0, 0.2),
 )
 test_dataset_config = ai_datasets.AiDataset.Config(
     sliding_window_dataset_config=sliding_window_dataset_config,
@@ -108,7 +107,7 @@ trainer_config = {
     "log_loss": True,
     "log_grad": False,
     "verbose": False,
-    "num_loading_workers": len(os.sched_getaffinity(0)) - 1,
+    "num_loading_workers": len(os.sched_getaffinity(0)) - 1,  # Reduce this to limit RAM usage, if necessary!
     "evaluator_type": ai_based.utilities.evaluators.ConfusionMatrixEvaluator,
     "interest_keys": [],  # Should stay empty, as used by analysis tools in later step
 }
@@ -119,8 +118,8 @@ base_hyperparameters = {
     "optimizer_args": {
         "betas": [0.9, 0.999],
         "eps": 1e-08,
-        "lr": 1e-3,  # 5e-4    It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
-        "weight_decay": 1e-4  # 5e-3
+        "lr": 5e-3,            # It is common to grid search learning rates on a log scale from 0.1 to 10^-5 or 10^-6
+        "weight_decay": 1e-4   # Too high values might prevent the NN from learning, too low values ease overfits
     },
     "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
     "scheduler_requires_metric": True,
@@ -135,64 +134,36 @@ base_hyperparameters = {
     "dataset_type": ai_datasets.AiDataset,
     "train_dataset_config": training_dataset_config,
     "test_dataset_config": test_dataset_config,
-    # "model": MLP,
-    # "model_config": MLP.Config(
-    #     input_tensor_shape=features_shape,
-    #     output_tensor_shape=(len(GroundTruthClass), *gt_shape),
-    #     hidden_layer_configs=[
-    #        MLP.Config.HiddenLayerConfig(out_features=10000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #        MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #        MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #        MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #        MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #        MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.7, activation_fn=nn.LeakyReLU()),
-    #     ],
-    #     last_layer_dropout=0.6,
-    #     last_layer_use_batchnorm=True
-    # ),
-    "model": Cnn1D,
-    "model_config": Cnn1D.Config(
+    "model": MLP,
+    "model_config": MLP.Config(
         input_tensor_shape=features_shape,
         output_tensor_shape=(len(GroundTruthClass), *gt_shape),
-        encoder_layer_configs=[
-            Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
-
-            Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            # Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
-
-            Cnn1D.Config.EncoderLayerConfig(out_channels=256, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            # Cnn1D.Config.EncoderLayerConfig(out_channels=256, kernel_size=13, stride=3, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
-
-            Cnn1D.Config.EncoderLayerConfig(out_channels=512, kernel_size=11, stride=3, use_batchnorm=True, pool_factor=None, dropout=0.3, activation_fn=nn.LeakyReLU()),
-            # Cnn1D.Config.EncoderLayerConfig(out_channels=512, kernel_size=3, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.3, activation_fn=nn.LeakyReLU()),
+        hidden_layer_configs=[
+           MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.5, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.5, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.5, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.5, activation_fn=nn.LeakyReLU()),
+           MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.5, activation_fn=nn.LeakyReLU()),
         ],
-        hidden_dense_layer_configs=[
-            MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
-            MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
-            MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
-            MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.4, activation_fn=nn.LeakyReLU()),
-        ],
-        last_layer_dropout=0.3,
+        last_layer_dropout=0.5,
         last_layer_use_batchnorm=True
     ),
-    # "model": CompositionNet,
-    # "model_config": CompositionNet.Config(
-    #     input_tensor_shape=input_data_shape,
-    #     output_tensor_shape=(3,),
-    #     convolutional_layer_configs=[
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=32, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=None, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=32, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=None, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=None, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=None, dropout=0.2, activation_fn=nn.LeakyReLU()),
-    #         Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=7, stride=1, use_batchnorm=True, pool_factor=3, dropout=0.2, activation_fn=nn.LeakyReLU()),
+    # "model": Cnn1D,
+    # "model_config": Cnn1D.Config(
+    #     input_tensor_shape=features_shape,
+    #     output_tensor_shape=(len(GroundTruthClass), *gt_shape),
+    #     encoder_layer_configs=[
+    #         Cnn1D.Config.EncoderLayerConfig(out_channels=64, kernel_size=11, stride=5, use_batchnorm=True, pool_factor=None, dropout=None, activation_fn=nn.LeakyReLU()),
+    #         Cnn1D.Config.EncoderLayerConfig(out_channels=128, kernel_size=11, stride=5, use_batchnorm=True, pool_factor=None, dropout=None, activation_fn=nn.LeakyReLU()),
+    #         Cnn1D.Config.EncoderLayerConfig(out_channels=512, kernel_size=15, stride=2, use_batchnorm=True, pool_factor=3, dropout=0.4, activation_fn=nn.LeakyReLU()),
+    #         Cnn1D.Config.EncoderLayerConfig(out_channels=1024, kernel_size=21, stride=2, use_batchnorm=True, pool_factor=3, dropout=0.4, activation_fn=nn.LeakyReLU()),
     #     ],
     #     hidden_dense_layer_configs=[
-    #         MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-    #         MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-    #         MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
-    #         MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.8, activation_fn=nn.LeakyReLU()),
+    #         MLP.Config.HiddenLayerConfig(out_features=3000, use_batchnorm=True, dropout=0.6, activation_fn=nn.LeakyReLU()),
+    #         MLP.Config.HiddenLayerConfig(out_features=1000, use_batchnorm=True, dropout=0.6, activation_fn=nn.LeakyReLU()),
+    #         MLP.Config.HiddenLayerConfig(out_features=300, use_batchnorm=True, dropout=0.6, activation_fn=nn.LeakyReLU()),
+    #         MLP.Config.HiddenLayerConfig(out_features=100, use_batchnorm=True, dropout=0.6, activation_fn=nn.LeakyReLU()),
+    #         MLP.Config.HiddenLayerConfig(out_features=30, use_batchnorm=True, dropout=0.6, activation_fn=nn.LeakyReLU()),
     #     ],
     #     last_layer_dropout=0.6,
     #     last_layer_use_batchnorm=True
@@ -205,7 +176,7 @@ def main():
     print("-" * 15 + " Preparations finished. Let's start to train " + "-" * 15)
     print()
 
-    Experiment.SILENTLY_OVERWRITE_PREVIOUS_RESULTS = True
+    # Experiment.SILENTLY_OVERWRITE_PREVIOUS_RESULTS = True
     experiment = Experiment(experiment_config, trainer_config, base_hyperparameters)
 
     experiment.run()

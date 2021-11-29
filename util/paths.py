@@ -9,3 +9,5 @@ DATA_PATH = (PROJECT_BASE_PATH / "data").resolve()
 TRAIN_TEST_SPLIT_YAML = (DATA_PATH / "physionet2018_train-test-split_0.8.yml")
 
 RESULTS_PATH_AI = (PROJECT_BASE_PATH / "ai_based" / "results").resolve()
+
+PRETRAINED_MODELS_PATH = (PROJECT_BASE_PATH / "ai_based" / "pretrained_models").resolve()
